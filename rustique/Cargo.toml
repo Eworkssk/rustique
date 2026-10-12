@@ -1,5 +1,5 @@
 [package]
-name = "rustique"
+name = "rustique-orm"
 description = "Eloquent-style ORM for MySQL 8.4+ and Oracle 19c+"
 version.workspace = true
 edition.workspace = true
@@ -7,9 +7,13 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "../README.md"
+documentation = "https://docs.rs/rustique-orm"
 keywords = ["orm", "mysql", "oracle", "eloquent", "database"]
 categories = ["database"]
-publish = false
+
+# Keeps `rustique::...` paths, which the generated macro code uses.
+[lib]
+name = "rustique"
 
 [features]
 default = ["mysql", "mysql-tls", "oracle"]
@@ -25,14 +29,14 @@ mysql-rustls = ["mysql", "mysql_async/rustls-tls", "mysql_async/tls12"]
 # Needs Oracle Instant Client at runtime only (libclntsh is loaded on first connect).
 oracle = ["dep:oracle"]
 # Checks `#[rustique::model]` structs against the `rustique-schema.txt` snapshot at compile time.
-schema-check = ["rustique-macros/schema-check"]
+schema-check = ["rustique-orm-macros/schema-check"]
 
 [dependencies]
 chrono.workspace = true
 itertools.workspace = true
 mysql_async = { workspace = true, optional = true }
 oracle = { workspace = true, optional = true }
-rustique-macros.workspace = true
+rustique-orm-macros.workspace = true
 rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true

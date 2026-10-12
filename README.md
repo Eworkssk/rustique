@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/banner.svg" alt="Rustique: Eloquent-style ORM for Rust" width="640">
+<img src="https://raw.githubusercontent.com/Eworkssk/rustique/main/assets/banner.svg" alt="Rustique: Eloquent-style ORM for Rust" width="640">
 
 <br>
 
@@ -14,10 +14,10 @@
 **Active-record models, a fluent query builder, relations, migrations and factories.**
 **One API, two SQL dialects.**
 
-[Documentation](docs/README.md) ·
-[Getting started](docs/getting-started.md) ·
-[Cheat sheet](docs/README.md#cheat-sheet) ·
-[Design](PLAN.md)
+[Documentation](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/README.md) ·
+[Getting started](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/getting-started.md) ·
+[Cheat sheet](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/README.md#cheat-sheet) ·
+[Design](https://github.com/Eworkssk/rustique/blob/main/PLAN.md)
 
 </div>
 
@@ -83,11 +83,11 @@ db.transaction(|tx| Box::pin(async move {
 
 ## Install
 
-`rustique` is not on crates.io yet. Use it as a git dependency:
+Published on crates.io as `rustique-orm`; the library is imported as `rustique`:
 
 ```toml
 [dependencies]
-rustique = { git = "https://github.com/Eworkssk/rustique" }
+rustique-orm = "0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 chrono = "0.4"
 ```
@@ -95,7 +95,7 @@ chrono = "0.4"
 MySQL only? Skip the Oracle client entirely:
 
 ```toml
-rustique = { git = "https://github.com/Eworkssk/rustique", default-features = false, features = ["mysql", "mysql-tls"] }
+rustique-orm = { version = "0.1", default-features = false, features = ["mysql", "mysql-tls"] }
 ```
 
 | Feature | Default | What it does |
@@ -157,18 +157,18 @@ The pages follow the Laravel Eloquent docs layout. Every code block compiles as 
 
 | | |
 |---|---|
-| [Getting started](docs/getting-started.md) | Install, features, connecting, pool and TLS |
-| [Query builder](docs/query-builder.md) | Selects, wheres, joins, aggregates, writes |
-| [Models](docs/models.md) | Retrieving, saving, timestamps, soft deletes, dirty tracking |
-| [Relationships](docs/relationships.md) | All relation kinds, eager loading, pivots |
-| [Casts](docs/casts.md) | `Cast`, `FromValue`, custom types |
-| [Scopes, hooks and observers](docs/events.md) | Reusable filters and lifecycle events |
-| [Pagination, chunking and cursors](docs/large-results.md) | Working with big tables |
-| [Transactions and raw SQL](docs/database.md) | Replicas, nested transactions, retries, logging |
-| [Factories](docs/factories.md) | Test data and seeding |
-| [Schema and migrations](docs/migrations.md) | Schema builder, `Migrator`, CLI |
-| [Database differences](docs/dialects.md) | What changes between MySQL and Oracle |
-| [Eloquent compatibility](docs/eloquent-compatibility.md) | What maps to Laravel, what does not |
+| [Getting started](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/getting-started.md) | Install, features, connecting, pool and TLS |
+| [Query builder](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/query-builder.md) | Selects, wheres, joins, aggregates, writes |
+| [Models](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/models.md) | Retrieving, saving, timestamps, soft deletes, dirty tracking |
+| [Relationships](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/relationships.md) | All relation kinds, eager loading, pivots |
+| [Casts](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/casts.md) | `Cast`, `FromValue`, custom types |
+| [Scopes, hooks and observers](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/events.md) | Reusable filters and lifecycle events |
+| [Pagination, chunking and cursors](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/large-results.md) | Working with big tables |
+| [Transactions and raw SQL](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/database.md) | Replicas, nested transactions, retries, logging |
+| [Factories](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/factories.md) | Test data and seeding |
+| [Schema and migrations](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/migrations.md) | Schema builder, `Migrator`, CLI |
+| [Database differences](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/dialects.md) | What changes between MySQL and Oracle |
+| [Eloquent compatibility](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/eloquent-compatibility.md) | What maps to Laravel, what does not |
 
 ## Development
 
@@ -194,17 +194,17 @@ cargo fmt --all
 cargo clippy --workspace --all-targets --all-features
 ```
 
-Layout: [`rustique/`](rustique) is the library, [`rustique-macros/`](rustique-macros) the proc macros,
-[`docs/`](docs) the user guide, and [`PLAN.md`](PLAN.md) the design and the decisions behind it.
+Layout: [`rustique/`](https://github.com/Eworkssk/rustique/blob/main/rustique) is the library, [`rustique-macros/`](https://github.com/Eworkssk/rustique/blob/main/rustique-macros) the proc macros,
+[`rustique/docs/`](https://github.com/Eworkssk/rustique/blob/main/rustique/docs) the user guide, and [`PLAN.md`](https://github.com/Eworkssk/rustique/blob/main/PLAN.md) the design and the decisions behind it.
 
 ## Status
 
 Pre-release. The API covers the full model, relation, migration and query surface described above and is
-tested against MySQL 8.4 and Oracle XE 21c. See [`PLAN.md`](PLAN.md#11-open-items) for what is still open.
+tested against MySQL 8.4 and Oracle XE 21c. See [`PLAN.md`](https://github.com/Eworkssk/rustique/blob/main/PLAN.md#11-open-items) for what is still open.
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
+Licensed under either of [Apache License, Version 2.0](https://github.com/Eworkssk/rustique/blob/main/LICENSE-APACHE) or [MIT license](https://github.com/Eworkssk/rustique/blob/main/LICENSE-MIT) at your option.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this crate
 by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
