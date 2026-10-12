@@ -45,29 +45,29 @@ pub mod cli;
 /// Compiles the snippets of `docs/` as doctests, so the docs cannot drift from the API.
 #[cfg(doctest)]
 mod docs {
-    #[doc = include_str!("../../docs/README.md")]
+    #[doc = include_str!("../docs/README.md")]
     mod README {}
-    #[doc = include_str!("../../docs/getting-started.md")]
+    #[doc = include_str!("../docs/getting-started.md")]
     mod getting_started {}
-    #[doc = include_str!("../../docs/query-builder.md")]
+    #[doc = include_str!("../docs/query-builder.md")]
     mod query_builder {}
-    #[doc = include_str!("../../docs/models.md")]
+    #[doc = include_str!("../docs/models.md")]
     mod models {}
-    #[doc = include_str!("../../docs/relationships.md")]
+    #[doc = include_str!("../docs/relationships.md")]
     mod relationships {}
-    #[doc = include_str!("../../docs/casts.md")]
+    #[doc = include_str!("../docs/casts.md")]
     mod casts {}
-    #[doc = include_str!("../../docs/events.md")]
+    #[doc = include_str!("../docs/events.md")]
     mod events {}
-    #[doc = include_str!("../../docs/large-results.md")]
+    #[doc = include_str!("../docs/large-results.md")]
     mod large_results {}
-    #[doc = include_str!("../../docs/database.md")]
+    #[doc = include_str!("../docs/database.md")]
     mod database {}
-    #[doc = include_str!("../../docs/migrations.md")]
+    #[doc = include_str!("../docs/migrations.md")]
     mod migrations {}
-    #[doc = include_str!("../../docs/factories.md")]
+    #[doc = include_str!("../docs/factories.md")]
     mod factories {}
-    #[doc = include_str!("../../docs/dialects.md")]
+    #[doc = include_str!("../docs/dialects.md")]
     mod dialects {}
 }
 mod backtrace;

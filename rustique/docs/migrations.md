@@ -235,7 +235,7 @@ The database URL comes from `$DATABASE_URL`, or the variable named by `--env VAR
 With the cargo feature `schema-check`, `#[rustique::model]` checks each struct against a snapshot of the database schema. The build never connects to a database: the snapshot is a file you commit.
 
 ```toml
-rustique = { version = "...", features = ["schema-check"] }
+rustique-orm = { version = "0.1", features = ["schema-check"] }
 ```
 
 ```bash
