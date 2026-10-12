@@ -1,0 +1,15 @@
+/target
+
+# Local tool and editor state
+/.claude/
+/.serena/
+/.idea/
+/.vscode/
+.DS_Store
+
+# Local secrets
+.env
+.env.*
+
+# Local-only tests ported from private applications
+/rustique/tests/private/

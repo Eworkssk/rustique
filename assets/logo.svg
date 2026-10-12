@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Rustique logo">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2E1D14"/><stop offset="1" stop-color="#150D09"/></linearGradient>
+    <linearGradient id="cu" gradientUnits="userSpaceOnUse" x1="0" y1="47" x2="0" y2="207"><stop offset="0" stop-color="#FFB27A"/><stop offset=".7" stop-color="#E2672A"/><stop offset=".72" stop-color="#2DD4BF"/><stop offset="1" stop-color="#14B8A6"/></linearGradient>
+    <mask id="rows" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256"><g fill="#fff"><rect x='0' y='47' width='256' height='13' rx='6.5'/><rect x='0' y='68' width='256' height='13' rx='6.5'/><rect x='0' y='89' width='256' height='13' rx='6.5'/><rect x='0' y='110' width='256' height='13' rx='6.5'/><rect x='0' y='131' width='256' height='13' rx='6.5'/><rect x='0' y='152' width='256' height='13' rx='6.5'/><rect x='0' y='173' width='256' height='13' rx='6.5'/><rect x='0' y='194' width='256' height='13' rx='6.5'/></g></mask>
+  </defs>
+  <rect x="12" y="12" width="232" height="232" rx="64" fill="url(#bg)"/>
+  <g mask="url(#rows)"><path d="M92 212 V62 H136 a37 37 0 0 1 0 74 H92 M137 136 L180 212" fill="none" stroke="url(#cu)" stroke-width="32" stroke-linejoin="round"/></g>
+</svg>

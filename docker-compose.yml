@@ -1,0 +1,23 @@
+# Databases for the integration tests. Start with `docker compose up -d`, then:
+#   RUSTIQUE_TEST_MYSQL_URL=mysql://orm:secret@127.0.0.1:13306/orm_test
+#   RUSTIQUE_TEST_ORACLE_URL=oracle://orm:secret@127.0.0.1:11521/XEPDB1
+#
+# Oracle XE 21c stands in for 19c locally (no free 19c image exists). It accepts
+# a few things 19c does not, so CI should also run against a real 19c database.
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: orm_test
+      MYSQL_USER: orm
+      MYSQL_PASSWORD: secret
+    ports: ["13306:3306"]
+
+  oracle:
+    image: gvenzl/oracle-xe:21-slim-faststart
+    environment:
+      ORACLE_PASSWORD: secret
+      APP_USER: orm
+      APP_USER_PASSWORD: secret
+    ports: ["11521:1521"]

@@ -1,0 +1,47 @@
+[package]
+name = "rustique"
+description = "Eloquent-style ORM for MySQL 8.4+ and Oracle 19c+"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../README.md"
+keywords = ["orm", "mysql", "oracle", "eloquent", "database"]
+categories = ["database"]
+publish = false
+
+[features]
+default = ["mysql", "mysql-tls", "oracle"]
+mysql = ["dep:mysql_async"]
+# TLS for MySQL (`?require_ssl=true`) through rustls with the `ring` provider.
+mysql-tls = ["mysql", "mysql_async/rustls-tls", "mysql_async/ring", "mysql_async/tls12"]
+# Needs Oracle Instant Client at runtime only (libclntsh is loaded on first connect).
+oracle = ["dep:oracle"]
+# Checks `#[rustique::model]` structs against the `rustique-schema.txt` snapshot at compile time.
+schema-check = ["rustique-macros/schema-check"]
+
+[dependencies]
+chrono.workspace = true
+itertools.workspace = true
+mysql_async = { workspace = true, optional = true }
+oracle = { workspace = true, optional = true }
+rustique-macros.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+rust_decimal.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+
+[lints]
+workspace = true
