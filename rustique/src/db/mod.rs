@@ -24,7 +24,7 @@ use std::sync::{Arc, OnceLock};
 
 pub use cursor::Cursor;
 pub use options::DbBuilder;
-#[cfg(feature = "mysql-tls")]
+#[cfg(feature = "mysql-rustls")]
 pub use options::Tls;
 pub use transaction::{Savepoint, Transaction};
 
@@ -305,6 +305,18 @@ enum Pool {
     Oracle(oracle::Pool),
 }
 
+impl Pool {
+    /// Connects: fails fast on bad credentials or an unreachable host.
+    async fn open(&self) -> Result<()> {
+        match self {
+            #[cfg(feature = "mysql")]
+            Self::MySql(pool) => mysql::checkout(pool).await.map(drop),
+            #[cfg(feature = "oracle")]
+            Self::Oracle(pool) => pool.open().await,
+        }
+    }
+}
+
 impl Db {
     /// Connects to the database at `url` and checks that it answers.
     ///
@@ -322,7 +334,8 @@ impl Db {
     ///
     /// Queries wait up to 30 seconds for a pooled connection. Percent-encode
     /// special characters in the user and password. [`Db::builder`] sets pool
-    /// size, timeouts and MySQL certificates in code.
+    /// size, timeouts, session setup and MySQL certificates in code, and
+    /// [`DbBuilder::connect_lazy`] creates a pool that connects on first use.
     ///
     /// # Errors
     ///
@@ -338,13 +351,14 @@ impl Db {
         DbBuilder::new(url)
     }
 
-    async fn open(url: &str, config: options::PoolConfig) -> Result<Self> {
+    /// A pool for `url` that has not connected yet.
+    fn open(url: &str, config: options::PoolConfig) -> Result<Self> {
         let scheme = url.split_once("://").map_or("", |(scheme, _)| scheme);
         let pool = match scheme {
             #[cfg(feature = "mysql")]
-            "mysql" => Pool::MySql(mysql::connect(url, config).await?),
+            "mysql" => Pool::MySql(mysql::pool(url, config)?),
             #[cfg(feature = "oracle")]
-            "oracle" => Pool::Oracle(oracle::Pool::connect(url, config).await?),
+            "oracle" => Pool::Oracle(oracle::Pool::new(url, config)?),
             _ => {
                 return Err(Error::Config(format!(
                     "unsupported URL scheme `{scheme}://`; enabled drivers: {}",

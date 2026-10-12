@@ -186,11 +186,18 @@ async fn bulk_insert_beyond_one_oracle_batch() {
     }
 }
 
+/// `--all-features` compiles in both rustls providers, so rustls needs one installed.
+fn install_crypto_provider() {
+    #[cfg(all(feature = "mysql-tls", feature = "mysql-tls-aws-lc-rs"))]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 #[tokio::test]
 async fn mysql_connects_over_tls() {
     let Ok(url) = std::env::var("RUSTIQUE_TEST_MYSQL_URL") else {
         return;
     };
+    install_crypto_provider();
     // The test server's certificate is self-signed.
     let separator = if url.contains('?') { '&' } else { '?' };
     let url = format!("{url}{separator}require_ssl=true&verify_ca=false&verify_identity=false");
@@ -203,12 +210,13 @@ async fn mysql_connects_over_tls() {
     assert!(!cipher.is_empty());
 }
 
-#[cfg(feature = "mysql-tls")]
+#[cfg(feature = "mysql-rustls")]
 #[tokio::test]
 async fn mysql_builder_tls() {
     let Ok(url) = std::env::var("RUSTIQUE_TEST_MYSQL_URL") else {
         return;
     };
+    install_crypto_provider();
     // The test server's certificate is self-signed.
     let db = rustique::Db::builder(&url)
         .tls(rustique::Tls::new().danger_accept_invalid_certs())

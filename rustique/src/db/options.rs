@@ -1,7 +1,7 @@
 //! [`DbBuilder`]: pool size, timeouts and TLS set in code instead of the URL.
 
 use std::fmt;
-#[cfg(feature = "mysql-tls")]
+#[cfg(feature = "mysql-rustls")]
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -31,7 +31,9 @@ pub(super) struct PoolConfig {
     pub max_lifetime: Option<Duration>,
     /// See [`DbBuilder::keep_sessions_after_raw_sql`].
     pub keep_sessions: bool,
-    #[cfg(feature = "mysql-tls")]
+    /// See [`DbBuilder::session_setup`].
+    pub session_setup: Vec<String>,
+    #[cfg(feature = "mysql-rustls")]
     pub tls: Option<Tls>,
 }
 
@@ -73,7 +75,8 @@ impl DbBuilder {
     }
 
     /// Idle connections the pool keeps open. Defaults: MySQL 10 (`?pool_min=`),
-    /// Oracle 1. Oracle opens them at connect; MySQL keeps them once opened.
+    /// Oracle 1. Oracle opens them at connect (with [`connect_lazy`](Self::connect_lazy),
+    /// at the first query); MySQL keeps them once opened.
     pub fn min_connections(mut self, min: u32) -> Self {
         self.config.min_connections = Some(min);
         self
@@ -115,10 +118,25 @@ impl DbBuilder {
         self
     }
 
+    /// SQL run on every new connection before its first query, such as
+    /// `SET SESSION ...` (MySQL) or `ALTER SESSION SET ...` (Oracle), so
+    /// session settings hold for every query of the pool. MySQL also runs it
+    /// again after each connection reset (after a transaction or raw SQL), and
+    /// Oracle on the new session that replaces a dropped one. A statement that
+    /// fails fails the query that opened the connection.
+    pub fn session_setup<I, S>(mut self, statements: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.config.session_setup = statements.into_iter().map(Into::into).collect();
+        self
+    }
+
     /// Connects to MySQL over TLS, verifying the server against `tls`.
     /// Oracle takes TLS in the URL instead (`tcps://`, see [`Db::connect`]),
     /// so this fails there with [`Error::Config`].
-    #[cfg(feature = "mysql-tls")]
+    #[cfg(feature = "mysql-rustls")]
     pub fn tls(mut self, tls: Tls) -> Self {
         self.config.tls = Some(tls);
         self
@@ -141,6 +159,23 @@ impl DbBuilder {
     /// As [`Db::connect`], plus [`Error::Config`] when `min_connections`
     /// exceeds `max_connections` or `max_connections` is 0.
     pub async fn connect(self) -> Result<Db> {
+        let db = self.connect_lazy()?;
+        for pool in std::iter::once(&db.pool).chain(db.read.iter()) {
+            pool.open().await?;
+        }
+        Ok(db)
+    }
+
+    /// Creates the pool without connecting: the first query opens the first
+    /// connection, and fails if the database is down. Lets an application
+    /// start while its database is unreachable. Oracle loads Instant Client
+    /// only then, too. Needs a tokio runtime only once queries run.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] for a malformed URL, a driver that is not compiled
+    /// in, or the pool sizes [`connect`](Self::connect) rejects.
+    pub fn connect_lazy(self) -> Result<Db> {
         let PoolConfig {
             min_connections,
             max_connections,
@@ -156,10 +191,10 @@ impl DbBuilder {
                 "min_connections ({min}) exceeds max_connections ({max})"
             )));
         }
-        let mut db = Db::open(&self.url, self.config.clone()).await?;
+        let mut db = Db::open(&self.url, self.config.clone())?;
         let mut read = Vec::with_capacity(self.read_urls.len());
         for url in &self.read_urls {
-            let replica = Db::open(url, self.config.clone()).await?;
+            let replica = Db::open(url, self.config.clone())?;
             if replica.dialect() != db.dialect() {
                 return Err(Error::Config(
                     "a read replica must use the same driver as the main URL".into(),
@@ -195,7 +230,7 @@ impl fmt::Debug for DbBuilder {
 /// let db = Db::builder("mysql://app@db.internal/app").tls(tls).connect().await?;
 /// # Ok(()) }
 /// ```
-#[cfg(feature = "mysql-tls")]
+#[cfg(feature = "mysql-rustls")]
 #[derive(Debug, Clone, Default)]
 pub struct Tls {
     pub(super) root_certs: Vec<PathBuf>,
@@ -203,7 +238,7 @@ pub struct Tls {
     pub(super) accept_invalid_certs: bool,
 }
 
-#[cfg(feature = "mysql-tls")]
+#[cfg(feature = "mysql-rustls")]
 impl Tls {
     /// TLS that trusts the system's root certificates.
     pub fn new() -> Self {
@@ -255,7 +290,7 @@ mod tests {
         assert!(e.contains("exceeds"), "{e}");
     }
 
-    #[cfg(all(feature = "mysql-tls", feature = "oracle"))]
+    #[cfg(all(feature = "mysql-rustls", feature = "oracle"))]
     #[tokio::test]
     async fn rejects_tls_settings_for_oracle() {
         let e = error(Db::builder("oracle://app:pw@db:1521/X").tls(Tls::new())).await;

@@ -84,7 +84,7 @@ mod timezone;
 mod value;
 
 pub use collection::Collection;
-#[cfg(feature = "mysql-tls")]
+#[cfg(feature = "mysql-rustls")]
 pub use db::Tls;
 pub use db::{
     AnyExecutor, Cursor, Db, DbBuilder, Executed, Executor, Savepoint, Transaction,

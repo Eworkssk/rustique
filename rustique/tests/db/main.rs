@@ -11,6 +11,7 @@
 //! Every test uses its own tables, so tests can run in parallel.
 
 mod casts;
+mod connections;
 mod cursors;
 mod edge_cases;
 mod eloquent;

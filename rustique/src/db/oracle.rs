@@ -27,7 +27,7 @@ const MAX_CONNECTIONS: u32 = 10;
 /// Session pool. Cheap to clone.
 #[derive(Clone)]
 pub(super) struct Pool {
-    pool: Arc<oracle::pool::Pool>,
+    sessions: Arc<Sessions>,
     /// One permit per connection, held while a caller uses one.
     permits: Arc<Semaphore>,
     acquire_timeout: Duration,
@@ -35,51 +35,62 @@ pub(super) struct Pool {
     keep_sessions: bool,
 }
 
+/// The ODPI-C session pool, created on first use, so a lazy `Db` neither
+/// connects nor loads Instant Client before its first query.
+struct Sessions {
+    config: Config,
+    settings: PoolConfig,
+    max: u32,
+    acquire_timeout: Duration,
+    created: Mutex<Option<oracle::pool::Pool>>,
+}
+
 impl Pool {
-    pub async fn connect(url: &str, pool: PoolConfig) -> Result<Self> {
-        #[cfg(feature = "mysql-tls")]
-        if pool.tls.is_some() {
+    /// A pool for `url` that connects on first use.
+    pub fn new(url: &str, settings: PoolConfig) -> Result<Self> {
+        #[cfg(feature = "mysql-rustls")]
+        if settings.tls.is_some() {
             return Err(Error::Config(
                 "Oracle TLS goes in the URL: oracle://user:password@tcps://host:2484/service?wallet_location=/path".to_owned(),
             ));
         }
         let config = Config::parse(url)?;
-        let max = pool.max_connections.unwrap_or(MAX_CONNECTIONS);
-        let acquire_timeout = pool.acquire_timeout.unwrap_or(ACQUIRE_TIMEOUT);
-        let keep_sessions = pool.keep_sessions;
-        let oracle_pool = blocking(move || {
-            let mut builder = PoolBuilder::new(config.user, config.password, config.connect);
-            builder.max_connections(max);
-            if let Some(min) = pool.min_connections {
-                if min > max {
-                    return Err(Error::Config(format!(
-                        "min_connections ({min}) exceeds max_connections ({max})"
-                    )));
-                }
-                builder.min_connections(min);
-            }
-            // Callers wait on the semaphore; this only covers a connection
-            // that is still on its way back to the pool.
-            builder.get_mode(GetMode::TimedWait(acquire_timeout));
-            if let Some(timeout) = pool.idle_timeout {
-                builder.timeout(timeout).map_err(error)?;
-            }
-            if let Some(lifetime) = pool.max_lifetime {
-                builder.max_lifetime_connection(lifetime).map_err(error)?;
-            }
-            builder.build().map_err(error)
-        })
-        .await?;
+        let max = settings.max_connections.unwrap_or(MAX_CONNECTIONS);
+        if let Some(min) = settings.min_connections
+            && min > max
+        {
+            return Err(Error::Config(format!(
+                "min_connections ({min}) exceeds max_connections ({max})"
+            )));
+        }
+        let acquire_timeout = settings.acquire_timeout.unwrap_or(ACQUIRE_TIMEOUT);
+        let keep_sessions = settings.keep_sessions;
         Ok(Self {
-            pool: Arc::new(oracle_pool),
+            sessions: Arc::new(Sessions {
+                config,
+                settings,
+                max,
+                acquire_timeout,
+                created: Mutex::new(None),
+            }),
             permits: Arc::new(Semaphore::new(max as usize)),
             acquire_timeout,
             keep_sessions,
         })
     }
 
+    /// Creates the session pool now, which opens `min_connections` sessions.
+    pub async fn open(&self) -> Result<()> {
+        let sessions = Arc::clone(&self.sessions);
+        blocking(move || sessions.pool().map(drop)).await
+    }
+
     pub async fn close(self) -> Result<()> {
-        blocking(move || self.pool.close(&CloseMode::Default).map_err(error)).await
+        blocking(move || match &*self.sessions.created() {
+            Some(pool) => pool.close(&CloseMode::Default).map_err(error),
+            None => Ok(()),
+        })
+        .await
     }
 
     /// Waits for a free connection without holding a thread.
@@ -99,10 +110,10 @@ impl Pool {
         f: impl FnOnce(&Connection) -> Result<T> + Send + 'static,
     ) -> Result<T> {
         let permit = self.permit().await?;
-        let pool = Arc::clone(&self.pool);
+        let sessions = Arc::clone(&self.sessions);
         cancellable(move |call| {
             let _permit = permit; // dropped after `conn`, once it is back in the pool
-            let conn = Arc::new(autocommit(pool.get().map_err(error)?, true));
+            let conn = Arc::new(autocommit(sessions.get()?, true));
             let result = call.run(&conn, true, f);
             if discard {
                 let _ = conn.close_with_mode(oracle::conn::CloseMode::Drop);
@@ -131,7 +142,7 @@ impl Pool {
             let permit = pool.permit().await?;
             blocking(move || {
                 let _permit = permit;
-                let conn = autocommit(pool.pool.get().map_err(error)?, true);
+                let conn = autocommit(pool.sessions.get()?, true);
                 stream(&conn, &query, &sink)
             })
             .await
@@ -140,11 +151,11 @@ impl Pool {
 
     pub async fn begin(&self) -> Result<Conn> {
         let permit = self.permit().await?;
-        let pool = Arc::clone(&self.pool);
+        let sessions = Arc::clone(&self.sessions);
         let keep = self.keep_sessions;
         blocking(move || {
             // Oracle starts the transaction with the first statement.
-            let conn = autocommit(pool.get().map_err(error)?, false);
+            let conn = autocommit(sessions.get()?, false);
             Ok(Conn(Arc::new(Session {
                 conn: Arc::new(conn),
                 lock: Mutex::new(()),
@@ -154,6 +165,53 @@ impl Pool {
             })))
         })
         .await
+    }
+}
+
+impl Sessions {
+    fn created(&self) -> MutexGuard<'_, Option<oracle::pool::Pool>> {
+        self.created.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The ODPI-C pool, created by the first call. Blocking.
+    fn pool(&self) -> Result<oracle::pool::Pool> {
+        let mut created = self.created();
+        if let Some(pool) = &*created {
+            return Ok(pool.clone());
+        }
+        let config = &self.config;
+        let mut builder = PoolBuilder::new(&config.user, &config.password, &config.connect);
+        builder.max_connections(self.max);
+        if let Some(min) = self.settings.min_connections {
+            builder.min_connections(min);
+        }
+        // Callers wait on the semaphore; this only covers a connection
+        // that is still on its way back to the pool.
+        builder.get_mode(GetMode::TimedWait(self.acquire_timeout));
+        if let Some(timeout) = self.settings.idle_timeout {
+            builder.timeout(timeout).map_err(error)?;
+        }
+        if let Some(lifetime) = self.settings.max_lifetime {
+            builder.max_lifetime_connection(lifetime).map_err(error)?;
+        }
+        let pool = builder.build().map_err(error)?;
+        *created = Some(pool.clone());
+        Ok(pool)
+    }
+
+    /// A pooled session; a new one first runs `DbBuilder::session_setup`. Blocking.
+    fn get(&self) -> Result<Connection> {
+        let conn = self.pool()?.get().map_err(error)?;
+        if conn.is_new_connection() {
+            for sql in &self.settings.session_setup {
+                if let Err(e) = conn.execute(sql, &[]) {
+                    // Never pooled half set up.
+                    let _ = conn.close_with_mode(oracle::conn::CloseMode::Drop);
+                    return Err(error(e));
+                }
+            }
+        }
+        Ok(conn)
     }
 }
 

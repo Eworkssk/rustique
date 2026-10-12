@@ -101,7 +101,7 @@ rustique = { git = "https://github.com/Eworkssk/rustique", default-features = fa
 | Feature | Default | What it does |
 |---|:---:|---|
 | `mysql` | yes | MySQL driver (`mysql_async`, pure Rust) |
-| `mysql-tls` | yes | TLS through rustls |
+| `mysql-tls` | yes | TLS through rustls (`ring` provider; `mysql-tls-aws-lc-rs` for `aws-lc-rs`) |
 | `oracle` | yes | Oracle driver. Needs Oracle Instant Client at **runtime** only |
 | `schema-check` | no | Checks model structs against a schema snapshot at compile time |
 

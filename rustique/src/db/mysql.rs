@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
-#[cfg(feature = "mysql-tls")]
+#[cfg(feature = "mysql-rustls")]
 use mysql_async::ClientIdentity;
 use mysql_async::consts::ColumnType;
 use mysql_async::prelude::Queryable;
@@ -32,9 +32,10 @@ pub(super) struct Pool {
     keep_sessions: bool,
 }
 
-pub(super) async fn connect(url: &str, config: PoolConfig) -> Result<Pool> {
+/// The pool for `url`; `mysql_async` connects on first use.
+pub(super) fn pool(url: &str, config: PoolConfig) -> Result<Pool> {
     let mut opts = Opts::from_url(url).map_err(|e| Error::Config(e.to_string()))?;
-    #[cfg(feature = "mysql-tls")]
+    #[cfg(feature = "mysql-rustls")]
     if let Some(tls) = config.tls {
         // Starts from the URL's TLS flags (`require_ssl=true&verify_ca=false`, ...), if any.
         let mut ssl = opts
@@ -51,7 +52,7 @@ pub(super) async fn connect(url: &str, config: PoolConfig) -> Result<Pool> {
         opts = OptsBuilder::from_opts(opts).ssl_opts(ssl).into();
     }
     // Without a TLS backend, `mysql_async` panics on `require_ssl`.
-    #[cfg(not(feature = "mysql-tls"))]
+    #[cfg(not(feature = "mysql-rustls"))]
     if opts.ssl_opts().is_some() {
         return Err(Error::Config(
             "MySQL TLS (`require_ssl`) needs the `mysql-tls` feature".to_owned(),
@@ -88,15 +89,16 @@ pub(super) async fn connect(url: &str, config: PoolConfig) -> Result<Pool> {
     if let Some(ttl) = config.max_lifetime {
         pool_opts = pool_opts.with_abs_conn_ttl(Some(ttl));
     }
-    opts = OptsBuilder::from_opts(opts).pool_opts(pool_opts).into();
+    opts = OptsBuilder::from_opts(opts)
+        .pool_opts(pool_opts)
+        .setup(config.session_setup) // also runs after each reset
+        .into();
 
-    let pool = Pool {
+    Ok(Pool {
         pool: mysql_async::Pool::new(opts),
         acquire_timeout: config.acquire_timeout.unwrap_or(ACQUIRE_TIMEOUT),
         keep_sessions: config.keep_sessions,
-    };
-    drop(checkout(&pool).await?); // fail fast on bad credentials or host
-    Ok(pool)
+    })
 }
 
 pub(super) async fn checkout(pool: &Pool) -> Result<mysql_async::Conn> {

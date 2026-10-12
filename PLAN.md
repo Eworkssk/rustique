@@ -295,6 +295,6 @@ Everything left undone, gathered from the phases above:
 - Schema: no `time` columns, no `use_current_on_update`, no migrations generated from a schema diff.
 - `make:migration` does not register the module in `migrations![...]`.
 - Relations: no per-parent limits in eager constraints, closures are untyped `QueryBuilder`s, `ofMany` takes one column.
-- No sticky replica reads, no per-connection session time zone.
+- No sticky replica reads, no per-connection session time zone (a pool-wide one works through `DbBuilder::session_setup`).
 - Schema check: relation keys, query-builder column strings and raw SQL are unchecked; one snapshot per crate.
 - `#[rustique::scopes]` keeps its own copy of the `Query` method names (`shortcut:` in `rustique-macros/src/lib.rs`).
