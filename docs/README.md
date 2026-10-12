@@ -6,7 +6,7 @@ The pages follow the layout of the Laravel Eloquent docs, so if you know Laravel
 
 | Page | What it covers |
 |---|---|
-| [Getting started](getting-started.md) | Install, features, connecting, the global `Db`, a first model |
+| [Getting started](getting-started.md) | Install, features, connecting (pool, TLS, session setup, lazy connection), the global `Db`, a first model |
 | [Query builder](query-builder.md) | `QueryBuilder`: selects, wheres (dates, JSON), `when`, joins, unions, ordering, aggregates, `value`, insert / update / delete / upsert / increment |
 | [Models](models.md) | `#[rustique::model]`, renamed columns, UUID / ULID keys, retrieving (`find_many`, `sole`), saving, `first_or_create` / `update_or_create`, `increment`, `refresh`, deleting, timestamps, soft deletes, dirty tracking, mass assignment (`Fill`), bulk insert / upsert, pruning |
 | [Relationships](relationships.md) | `has_one`, `has_many`, `belongs_to`, `belongs_to_many`, `has_many_through`, `has_one_through`, polymorphic (`morph_to_many` too), eager loading and its constraints, N+1 detection, `with_count` / `with_sum` / `with_exists`, `where_has` / `where_has_morph`, pivots (`sync_without_detaching`, `toggle`) and pivot columns |

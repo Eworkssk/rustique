@@ -15,7 +15,13 @@ publish = false
 default = ["mysql", "mysql-tls", "oracle"]
 mysql = ["dep:mysql_async"]
 # TLS for MySQL (`?require_ssl=true`) through rustls with the `ring` provider.
-mysql-tls = ["mysql", "mysql_async/rustls-tls", "mysql_async/ring", "mysql_async/tls12"]
+mysql-tls = ["mysql-rustls", "mysql_async/ring"]
+# The same with the `aws-lc-rs` provider, for applications whose other rustls
+# users (reqwest, ...) bring it: with two providers compiled in, rustls panics
+# unless the application installs one.
+mysql-tls-aws-lc-rs = ["mysql-rustls", "mysql_async/aws-lc-rs"]
+# TLS without a provider: the application compiles in or installs exactly one.
+mysql-rustls = ["mysql", "mysql_async/rustls-tls", "mysql_async/tls12"]
 # Needs Oracle Instant Client at runtime only (libclntsh is loaded on first connect).
 oracle = ["dep:oracle"]
 # Checks `#[rustique::model]` structs against the `rustique-schema.txt` snapshot at compile time.
@@ -42,6 +48,7 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+rustls = { version = "0.23", default-features = false }
 
 [lints]
 workspace = true

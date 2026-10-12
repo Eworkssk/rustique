@@ -214,6 +214,8 @@ tx.commit().await?;
 # Ok(()) }
 ```
 
+Settings every connection needs belong in [`session_setup`](getting-started.md#pool-settings-and-tls) instead: it runs on each new connection and again after each MySQL reset, so the resets below never undo it.
+
 Session state never reaches later queries that borrow the same pooled connection:
 
 - **MySQL**: a connection that ran raw SQL through `select` / `statement`, or a transaction, is reset when it returns to the pool. Query builder and model queries skip the reset and keep their prepared statements (about half the round trips per query).
