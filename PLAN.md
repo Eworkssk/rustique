@@ -224,7 +224,7 @@ Estimates assume one developer who knows async Rust. Proc-macro and Oracle setup
    Oracle `insert_many`: one PL/SQL block per 100 rows (`INSERT ... RETURNING INTO` local variables, copied into out binds at the end so they follow every in bind); `Compiled::returning` is now a count, and `fetch_all` returns the out binds as rows. Schema: `Column::change()` (MySQL `MODIFY`; Oracle `MODIFY` of type and default plus a nullability switch only when it differs, in a PL/SQL block).
    Tests in `rustique/tests/sql/helpers.rs`, `rustique/tests/db/helpers.rs` and `rustique/tests/lazy.rs` (own binary: the lazy-loading switch is process-wide).
    Factories: `HasFactory::definition(n)` plus `Factory` (`count`, `state`, `sequence`, `make`, `create`, `has` / `has_attached`, `for_` / `for_factory`, `recycle`, `after_making` / `after_creating`). Children and parent factories are stored type-erased, so their callbacks get an `AnyExecutor` (`&Db` or `&Transaction`); `Relation` now carries its `RelationKind` and models expose `morph_columns` for this. No Faker equivalent; `definition` gets a process-wide counter `n`.
-   Not done: schema-diff migrations, typed eager-constraint closures. (Per-parent limits came later: `QueryBuilder::limit_per`, `ROW_NUMBER` window in eager loads.)
+   Schema-diff migrations (`make:migration --diff`, `rustique/src/schema_diff.rs`) and typed eager-constraint closures came in the gap pass. (Per-parent limits came later: `QueryBuilder::limit_per`, `ROW_NUMBER` window in eager loads.)
 
 9. **Second Eloquent parity pass** — **done 2026-10-11**
    From `rustique/docs/eloquent-compatibility.md`, whose first version was partly stale (many items had come in phase 8).
@@ -289,9 +289,7 @@ Final review (2026-10-12): fixed `Model::increment` leaving unsigned and decimal
 
 Everything left undone, gathered from the phases above:
 
-- Schema: no migrations generated from a schema diff.
-- Relations: eager-constraint closures are untyped `QueryBuilder`s.
-- Schema check: relation keys, query-builder column strings and raw SQL are unchecked; one snapshot per crate.
-- MySQL: a dropped statement inside a transaction is not killed (the connection stays with the transaction); only pooled statements send `KILL QUERY`.
-- Sticky reads are task-local (`Db::sticky_scope`): tasks spawned inside the scope do not share the flag (`shortcut:` in `db/mod.rs`).
+- Schema diff (`make:migration --diff`): the snapshot is the desired schema, so it needs a version-2 `rustique-schema.txt`. Not diffed: check constraints, comments, Oracle sequences, views (listed as tables), cross-schema foreign keys; `json`/`long_text`/`time` on Oracle and `uuid` on both read back as `text`/`string`/`char`.
+- Typed relation constraints (`with_typed`, `where_has_typed`, `where_doesnt_have_typed` with `Model::REL` constants): nested paths, `"rel:cols"` lists, `morph_to` and the aggregate forms (`with_count`, `with_sum`, ...) stay string-based.
+- Schema check: the related table of a relation is guessed as the snake_case plural of the type name; lone column names in scopes and `sql!` with `WITH`, aliases or unqualified columns are skipped (`shortcut:` comments in `rustique-macros/src/schema_check.rs`).
 - CI's Oracle 19c job (`doctorkirk/oracle-19c`, unofficial image, last pushed 2021) has not run yet; the first run may expose 19c-only test failures.
