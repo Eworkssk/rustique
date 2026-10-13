@@ -5,20 +5,45 @@
 //! Without the file nothing is checked. Types the check does not know,
 //! such as `#[derive(rustique::Cast)]` types, are checked for existence only.
 //! Relation keys are checked when their table is in the snapshot.
+//!
+//! `col!`, `#[rustique::scopes]` and relation `scope`s check column strings
+//! (`column_literals`, `check_reference`).
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::quote;
+use proc_macro2::{Delimiter, Span, TokenStream as TokenStream2, TokenTree};
+use quote::{ToTokens, quote};
 use syn::{GenericArgument, Ident, LitStr, PathArguments, Type};
 
 use crate::{Column, MorphToField, RelationField, RelationKind, snake, type_name};
 
 const FILE: &str = "rustique-schema.txt";
 
-/// Errors for every field or relation key that does not match the snapshot,
-/// or tokens that make cargo rebuild the model when the snapshot changes.
+/// The snapshot next to the crate's `Cargo.toml`, with tokens that make cargo
+/// rebuild the caller when the file changes; `None` without the file.
+pub(crate) fn load() -> syn::Result<Option<(Snapshot, TokenStream2)>> {
+    let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") else {
+        return Ok(None);
+    };
+    let path = Path::new(&dir).join(FILE);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    let snapshot = Snapshot::parse(&text).map_err(|problem| {
+        syn::Error::new(Span::call_site(), format!("{}: {problem}", path.display()))
+    })?;
+    let path = path.display().to_string();
+    Ok(Some((
+        snapshot,
+        quote!(
+            const _: &[u8] = ::core::include_bytes!(#path);
+        ),
+    )))
+}
+
+/// Errors for every field, relation key or column string of a relation
+/// `scope` that does not match the snapshot, or the rebuild tokens of [`load`].
 pub(crate) fn check(
     table: &LitStr,
     model: &Ident,
@@ -26,28 +51,160 @@ pub(crate) fn check(
     relations: &[RelationField],
     morphs: &[MorphToField],
 ) -> syn::Result<TokenStream2> {
-    let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") else {
+    let Some((snapshot, rebuild)) = load()? else {
         return Ok(TokenStream2::new());
     };
-    let path = Path::new(&dir).join(FILE);
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Ok(TokenStream2::new());
-    };
-    let snapshot = Snapshot::parse(&text).map_err(|problem| {
-        syn::Error::new(Span::call_site(), format!("{}: {problem}", path.display()))
-    })?;
     let keys = relation_keys(&table.value(), model, relations, morphs);
-    let results = [
+    let mut literals = Vec::new();
+    for scope in relations.iter().filter_map(|r| r.scope.as_ref()) {
+        column_literals(scope.to_token_stream(), &mut literals);
+    }
+    let errors = [
         check_columns(&snapshot, table, columns),
         check_keys(&snapshot, &keys),
-    ];
-    if let Some(error) = combine(results.into_iter().filter_map(Result::err)) {
-        return Err(error);
+    ]
+    .into_iter()
+    .filter_map(Result::err)
+    .chain(
+        literals
+            .iter()
+            .filter_map(|l| check_reference(&snapshot, l, false).err()),
+    );
+    combine(errors).map_or(Ok(rebuild), Err)
+}
+
+/// `col!("table.column")`: the literal, after [`check_reference`] with `strict`.
+pub(crate) fn col(literal: &LitStr) -> syn::Result<TokenStream2> {
+    let Some((snapshot, rebuild)) = load()? else {
+        return Ok(quote!(#literal));
+    };
+    check_reference(&snapshot, literal, true)?;
+    Ok(quote!({ #rebuild #literal }))
+}
+
+/// Errors for the `table.column` strings that `tokens` passes to query-builder
+/// methods ([`column_literals`]), or the rebuild tokens of [`load`].
+pub(crate) fn check_tokens(tokens: TokenStream2) -> syn::Result<TokenStream2> {
+    let Some((snapshot, rebuild)) = load()? else {
+        return Ok(TokenStream2::new());
+    };
+    let mut literals = Vec::new();
+    column_literals(tokens, &mut literals);
+    let errors = literals
+        .iter()
+        .filter_map(|l| check_reference(&snapshot, l, false).err());
+    combine(errors).map_or(Ok(rebuild), Err)
+}
+
+/// `column` (in any table), `table.column` or `table.*`: an error when the
+/// snapshot has no such column. With `strict`, a table missing from the
+/// snapshot or a lone column in no table is an error; otherwise it is skipped,
+/// as are strings of any other shape (`schema.table.column`, `count(*)`, `id as key`).
+pub(crate) fn check_reference(
+    snapshot: &Snapshot,
+    literal: &LitStr,
+    strict: bool,
+) -> syn::Result<()> {
+    let value = literal.value();
+    let plain = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let fail = |message: String| Err(syn::Error::new_spanned(literal, message));
+    match value.split_once('.') {
+        Some((table, column)) if plain(table) && (plain(column) || column == "*") => {
+            match snapshot.tables.get(&table.to_lowercase()) {
+                None if strict => fail(format!("table `{table}` is not in {FILE}")),
+                Some(columns) if column != "*" && !columns.contains_key(&column.to_lowercase()) => {
+                    fail(format!(
+                        "table `{table}` has no column `{column}` in {FILE}"
+                    ))
+                }
+                _ => Ok(()),
+            }
+        }
+        None if strict
+            && plain(&value)
+            && !snapshot
+                .tables
+                .values()
+                .any(|t| t.contains_key(&value.to_lowercase())) =>
+        {
+            fail(format!("no table has a column `{value}` in {FILE}"))
+        }
+        _ => Ok(()),
     }
-    let path = path.display().to_string();
-    Ok(quote!(
-        const _: &[u8] = ::core::include_bytes!(#path);
-    ))
+}
+
+/// Query-builder methods whose first argument is a column.
+const COLUMN_METHODS: &[&str] = &[
+    "where_",
+    "or_where",
+    "where_in",
+    "or_where_in",
+    "where_not_in",
+    "or_where_not_in",
+    "where_null",
+    "or_where_null",
+    "where_not_null",
+    "or_where_not_null",
+    "where_between",
+    "where_not_between",
+    "where_date",
+    "where_column",
+    "or_where_column",
+    "order_by",
+    "order_by_desc",
+    "group_by",
+    "select",
+    "add_select",
+];
+
+/// The string literals, or arrays of them, that `tokens` passes as the first
+/// argument of a [`COLUMN_METHODS`] call: `.where_("users.active", ...)`,
+/// `.select(["users.id"])`.
+///
+/// shortcut: matches method names on tokens, without types, so a non-`Query`
+/// method of the same name is scanned too; harmless while only `table.column`
+/// strings naming a snapshot table are checked. Upgrade if lone columns should
+/// be checked against the model's table.
+pub(crate) fn column_literals(tokens: TokenStream2, found: &mut Vec<LitStr>) {
+    let tokens: Vec<TokenTree> = tokens.into_iter().collect();
+    for (i, token) in tokens.iter().enumerate() {
+        if let TokenTree::Group(group) = token {
+            column_literals(group.stream(), found);
+        }
+        let Some(
+            [
+                TokenTree::Punct(dot),
+                TokenTree::Ident(method),
+                TokenTree::Group(args),
+            ],
+        ) = tokens.get(i..i + 3)
+        else {
+            continue;
+        };
+        if dot.as_char() != '.'
+            || args.delimiter() != Delimiter::Parenthesis
+            || !COLUMN_METHODS.contains(&method.to_string().as_str())
+        {
+            continue;
+        }
+        let first: Vec<TokenTree> = args
+            .stream()
+            .into_iter()
+            .take_while(|t| !matches!(t, TokenTree::Punct(p) if p.as_char() == ','))
+            .collect();
+        let literals = match &first[..] {
+            [TokenTree::Group(array)] if array.delimiter() == Delimiter::Bracket => {
+                array.stream().into_iter().collect()
+            }
+            [TokenTree::Literal(_)] => first,
+            _ => continue,
+        };
+        found.extend(
+            literals
+                .into_iter()
+                .filter_map(|t| syn::parse2::<LitStr>(t.into()).ok()),
+        );
+    }
 }
 
 #[derive(Debug, Default)]
@@ -549,6 +706,56 @@ mod tests {
                 "table `users` has no column `owner_type` in rustique-schema.txt",
             ]
         );
+    }
+
+    #[test]
+    fn checks_column_strings() {
+        let snapshot = Snapshot::parse(MYSQL).unwrap();
+        let check = |value: &str, strict| {
+            check_reference(&snapshot, &LitStr::new(value, Span::call_site()), strict)
+                .err()
+                .map(|e| e.to_string())
+        };
+        for ok in [
+            "users.email",
+            "USERS.EMAIL",
+            "users.*",
+            "email",
+            "a.b.c",
+            "count(*)",
+        ] {
+            assert_eq!(check(ok, true), None, "{ok}");
+        }
+        assert_eq!(
+            check("users.mail", false).unwrap(),
+            "table `users` has no column `mail` in rustique-schema.txt"
+        );
+        assert_eq!(
+            check("posts.id", true).unwrap(),
+            "table `posts` is not in rustique-schema.txt"
+        );
+        assert_eq!(check("posts.id", false), None);
+        assert_eq!(
+            check("mail", true).unwrap(),
+            "no table has a column `mail` in rustique-schema.txt"
+        );
+        assert_eq!(check("mail", false), None);
+
+        let mut found = Vec::new();
+        column_literals(
+            quote! {
+                fn scope_x(q: Query<User>) -> Query<User> {
+                    q.where_("users.a", "=", 1)
+                        .select(["users.b", "users.c"])
+                        .where_has("posts.comments", |p| p.order_by("posts.d"))
+                        .where_(name, "=", 1)
+                        .where_raw("users.e = 1")
+                }
+            },
+            &mut found,
+        );
+        let found: Vec<String> = found.iter().map(LitStr::value).collect();
+        assert_eq!(found, ["users.a", "users.b", "users.c", "posts.d"]);
     }
 
     #[test]

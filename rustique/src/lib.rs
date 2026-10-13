@@ -101,7 +101,7 @@ pub use model::{
 };
 pub use query::{Chunks, CursorPage, JoinClause, Page, QueryBuilder, SimplePage};
 pub use row::Row;
-pub use rustique_macros::{Cast, MorphTo, model, scopes};
+pub use rustique_macros::{Cast, MorphTo, col, model, scopes};
 pub use schema::{Blueprint, Column, ForeignKey, Index, Schema};
 pub use timezone::{now, set_timezone};
 pub use value::{FromValue, Value, ValueError};

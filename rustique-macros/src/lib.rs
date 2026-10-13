@@ -41,6 +41,25 @@ pub fn model(args: TokenStream, item: TokenStream) -> TokenStream {
         .into()
 }
 
+/// `col!("users.email")` or `col!("email")`: the string itself, a
+/// `&'static str` for any query-builder method.
+///
+/// With the `schema-check` feature and a schema snapshot, it is a compile
+/// error when the table is not in the snapshot, the table has no such column,
+/// or (without a table) no table has the column. `table.*` checks the table;
+/// other shapes, such as `schema.table.column`, are not checked.
+#[proc_macro]
+pub fn col(input: TokenStream) -> TokenStream {
+    let column = parse_macro_input!(input as LitStr);
+    #[cfg(feature = "schema-check")]
+    let expanded = schema_check::col(&column);
+    #[cfg(not(feature = "schema-check"))]
+    let expanded = Ok::<_, syn::Error>(quote!(#column));
+    expanded
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
 /// Stores a type in a column: implements `rustique::FromValue` and
 /// `From<T> for rustique::Value`, so the type can be a model field and a binding.
 ///
@@ -87,6 +106,10 @@ pub fn derive_morph_to(item: TokenStream) -> TokenStream {
 /// A scope named like a Rust keyword (`scope_type`) becomes `r#type`. A
 /// scope cannot share its name with another method of the model, such as a
 /// relation, nor with an associated function of `rustique::Model` such as `find`.
+///
+/// With the `schema-check` feature, `"table.column"` literals passed to
+/// `where_*`, `order_by*`, `group_by` and `select` in the block are checked
+/// against the schema snapshot when it has the table.
 #[proc_macro_attribute]
 pub fn scopes(args: TokenStream, item: TokenStream) -> TokenStream {
     let item = parse_macro_input!(item as ItemImpl);
@@ -185,8 +208,14 @@ fn expand_scopes(item: ItemImpl) -> syn::Result<TokenStream2> {
         });
     }
     let doc = format!("Query scopes of `{model}`, from its `#[rustique::scopes]` block.");
+    #[cfg(feature = "schema-check")]
+    let schema_check = schema_check::check_tokens(quote!(#item))?;
+    #[cfg(not(feature = "schema-check"))]
+    let schema_check = TokenStream2::new();
     Ok(quote! {
         #item
+
+        #schema_check
 
         #[doc = #doc]
         pub trait #scopes_trait: ::core::marker::Sized {

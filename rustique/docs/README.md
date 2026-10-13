@@ -64,6 +64,7 @@ user.delete(&db).await?;                               // soft delete (sets dele
 let posts = user.posts().where_("published", "=", true).get(&db).await?; // lazy relation query
 let users = User::query().with_where("posts", |q| q.where_("published", "=", true)).get(&db).await?;
 let users = User::query().with("posts:id,title").get(&db).await?;   // only those columns of posts
+let posts = Post::query().order_by(rustique::col!("posts.id")).get(&db).await?; // checked with `schema-check`
 let page = User::query().cursor_paginate(&db, 50, None).await?;  // page.next_cursor for the next one
 let ann = User::first_or_create(&db, vec![(User::EMAIL, "a@x.io".into())], vec![]).await?;
 for post in user.posts.loaded()? { /* after with("posts") or user.load(&db, "posts") */ }

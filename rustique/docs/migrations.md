@@ -252,7 +252,19 @@ Each model gets a compile error at the field for:
 - a column type the field type cannot read, such as a `varchar` into `i64` or a `decimal(10,2)` into `i64`;
 - a key that a relation attribute names (`foreign_key`, `local_key`, `owner_key`, `parent_key`, `related_key`, the pivot keys, `pivot` columns, `pivot_timestamps`, the `through` keys) and the `{name}_type` / `{name}_id` columns of morph relations and `morph_to` fields, when the snapshot has the table they belong in. The macro knows the related model only as a type, so it looks for the related table under the snake_case plural of the type name (`BlogPost` is `blog_posts`) and skips the key when the snapshot has no such table. Keys left to their defaults are not checked, except the morph columns.
 
-The check is skipped without the feature or without the file, so a fresh clone builds as before. Field types the check does not know, such as `#[derive(rustique::Cast)]` types and `rustique::Value`, are only checked for existence. Tables named `schema.table` are not checked. The check only covers model fields: column names in query-builder calls and raw SQL are still checked at runtime.
+The check is skipped without the feature or without the file, so a fresh clone builds as before. Field types the check does not know, such as `#[derive(rustique::Cast)]` types and `rustique::Value`, are only checked for existence. Tables named `schema.table` are not checked.
+
+Column strings for the query builder can go through `rustique::col!`, which expands to the string itself and, with a snapshot, fails to compile when the table is not in it, the table has no such column, or (for a lone `col!("email")`) no table has the column. `col!("users.*")` checks the table only.
+
+```rust
+# use rustique::prelude::*;
+# #[rustique::model(table = "users")]
+# #[derive(Debug, Clone, Default)]
+# pub struct User { pub id: i64, pub email: String }
+let query = User::query().where_(rustique::col!("users.email"), "=", "a@x.io");
+```
+
+`#[rustique::scopes]` blocks and relation `scope = ...` closures are checked as well, but only for `"table.column"` literals passed as the first argument of `where_*`, `order_by*`, `group_by`, `select` and `add_select` (or as an array to `select`), and only when the snapshot has that table. Lone column names are not checked there, since the closure may be for another model; neither are expressions, aliases or `*_raw` methods. Raw SQL is checked at runtime only.
 
 To fail CI on a stale snapshot, migrate a database, run `schema:snapshot` and check that `git diff --exit-code rustique-schema.txt` passes.
 
