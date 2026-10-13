@@ -28,6 +28,10 @@
 //!   name gets a `Schema::create` skeleton. It also adds `mod <module>;` and the
 //!   module to the [`migrations!`](crate::migrations) list in `<dir>/mod.rs`
 //!   (a hint is printed instead when that file has no such list).
+//!   With `--diff`, the migration's `up` turns the database into the schema
+//!   described by the snapshot file (`--snapshot <file>`, default
+//!   `rustique-schema.txt`) and `down` turns it back; nothing is written when
+//!   they match.
 //! - `schema:snapshot [--path <file>]`: writes the columns of every table to
 //!   `<file>` (default `rustique-schema.txt`), for the compile-time check of
 //!   `#[rustique::model]` structs (cargo feature `schema-check`). Run it from the
@@ -49,7 +53,9 @@ commands:
   migrate:fresh --force [--seed]           drop every table, then run every migration
   migrate:status                           list migrations and their batch
   db:seed                                  run the seeder
-  make:migration <name> [--path <dir>]     create a migration file
+  make:migration <name> [--path <dir>] [--diff [--snapshot <file>]]
+                                           create a migration file; with --diff, from the
+                                           database to the schema snapshot
   schema:snapshot [--path <file>]          write the schema snapshot for the compile-time model check";
 
 /// Runs the command in `args` (without the program name) and prints its
@@ -129,8 +135,27 @@ async fn execute(
             let [name] = &args.positional[..] else {
                 return Err(usage("make:migration takes one name"));
             };
+            let valid = name.starts_with(|c: char| c.is_ascii_lowercase())
+                && (name.chars()).all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+            if !valid {
+                return Err(usage(&format!(
+                    "migration name `{name}` must be snake_case: create_users_table"
+                )));
+            }
             let dir = args.path.as_deref().unwrap_or("src/migrations");
-            make_migration(Path::new(dir), name)?
+            let source = if args.diff {
+                let file = (args.snapshot.as_deref()).unwrap_or(crate::schema::SNAPSHOT_FILE);
+                let desired = fs::read_to_string(file)
+                    .map_err(|e| Error::Config(format!("cannot read {file}: {e}")))?;
+                let live = crate::schema::snapshot(&args.connect().await?).await?;
+                match crate::schema_diff::migration(&desired, &live, file)? {
+                    Some(source) => source,
+                    None => return Ok(vec![format!("No changes: the database matches {file}.")]),
+                }
+            } else {
+                template(name)
+            };
+            make_migration(Path::new(dir), name, &source)?
         }
         "schema:snapshot" => {
             let text = crate::schema::snapshot(&args.connect().await?).await?;
@@ -163,8 +188,10 @@ struct Args {
     env: Option<String>,
     path: Option<String>,
     step: Option<String>,
+    snapshot: Option<String>,
     seed: bool,
     force: bool,
+    diff: bool,
 }
 
 impl Args {
@@ -182,6 +209,8 @@ impl Args {
                 "--step" => parsed.step = Some(value()?),
                 "--seed" => parsed.seed = true,
                 "--force" => parsed.force = true,
+                "--diff" => parsed.diff = true,
+                "--snapshot" => parsed.snapshot = Some(value()?),
                 flag if flag.starts_with("--") => {
                     return Err(usage(&format!("unknown option `{flag}`")));
                 }
@@ -200,17 +229,8 @@ impl Args {
     }
 }
 
-/// Writes a new migration module into `dir`.
-fn make_migration(dir: &Path, name: &str) -> Result<Vec<String>> {
-    let valid = name.starts_with(|c: char| c.is_ascii_lowercase())
-        && name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-    if !valid {
-        return Err(usage(&format!(
-            "migration name `{name}` must be snake_case: create_users_table"
-        )));
-    }
+/// Writes a new migration module with `source` into `dir`.
+fn make_migration(dir: &Path, name: &str, source: &str) -> Result<Vec<String>> {
     let module = format!("m{}_{name}", Utc::now().format("%Y_%m_%d_%H%M%S"));
     let file = dir.join(format!("{module}.rs"));
     let io = |e: std::io::Error| Error::Config(format!("cannot write {}: {e}", file.display()));
@@ -220,7 +240,7 @@ fn make_migration(dir: &Path, name: &str) -> Result<Vec<String>> {
         .create_new(true)
         .open(&file)
         .map_err(io)?;
-    out.write_all(template(name).as_bytes()).map_err(io)?;
+    out.write_all(source.as_bytes()).map_err(io)?;
     let mut lines = vec![format!("Created: {}", file.display())];
     let mod_rs = dir.join("mod.rs");
     match fs::read_to_string(&mod_rs)
@@ -409,6 +429,7 @@ mod tests {
             "make:migration",
             "make:migration Bad-Name",
             "make:migration a b",
+            "make:migration a --diff --snapshot",
             "frobnicate",
             "migrate --verbose",
             "migrate --env",

@@ -80,6 +80,7 @@ mod model;
 mod query;
 mod row;
 mod schema;
+mod schema_diff;
 mod timezone;
 mod value;
 

@@ -183,57 +183,162 @@ pub(crate) async fn drop_all_tables(db: &Db, keep: &[&str]) -> Result<()> {
 /// `schema-check` feature, next to the crate's `Cargo.toml`.
 pub(crate) const SNAPSHOT_FILE: &str = "rustique-schema.txt";
 
-/// The schema snapshot of the current database (MySQL) or user (Oracle): a
-/// `dialect` line, then one tab-separated `table, column, null / not null,
-/// type` line per column. `rustique-macros/src/schema_check.rs` reads it.
+/// The schema snapshot of the current database (MySQL) or user (Oracle):
+/// `dialect` and `version` lines, then tab-separated lines, read by
+/// `rustique-macros/src/schema_check.rs` and by `make:migration --diff`
+/// (`schema_diff.rs`):
+///
+/// - a column: `table, column, null | not null, type[, default SQL[,
+///   auto_increment | use_current_on_update]]`;
+/// - a key: `table, name, primary key | unique | index, col1,col2`; primary
+///   keys are named `primary`, since Oracle names them `SYS_C...`;
+/// - a foreign key: `table, name, foreign key, columns, referenced table,
+///   referenced columns, cascade | set null | restrict`.
 pub(crate) async fn snapshot(db: &Db) -> Result<String> {
     let db = &db.write();
-    let sql = match db.dialect() {
-        Dialect::MySql => {
+    let (columns, keys) = match db.dialect() {
+        // Defaults as SQL: literals quoted unless numeric, expressions in parentheses.
+        Dialect::MySql => (
             "SELECT table_name AS tbl, column_name AS col, is_nullable AS nullable, \
-             column_type AS ty FROM information_schema.columns \
-             WHERE table_schema = DATABASE() ORDER BY table_name, ordinal_position"
-        }
-        // `NUMBER(p,s)` and `VARCHAR2(n)` as written in DDL; `NUMBER(*,0)` for `INTEGER`.
-        Dialect::Oracle => {
+             column_type AS ty, CASE WHEN column_default IS NULL THEN NULL \
+             WHEN extra LIKE '%DEFAULT_GENERATED%' THEN CONCAT('(', column_default, ')') \
+             WHEN data_type IN ('tinyint', 'smallint', 'mediumint', 'int', 'bigint', \
+             'decimal', 'float', 'double', 'bit', 'year') THEN column_default \
+             ELSE QUOTE(column_default) END AS dflt, \
+             CASE WHEN extra LIKE '%auto_increment%' THEN 'auto_increment' \
+             WHEN extra LIKE '%on update%' THEN 'use_current_on_update' END AS extra \
+             FROM information_schema.columns \
+             WHERE table_schema = DATABASE() ORDER BY table_name, ordinal_position",
+            // The index MySQL makes for a foreign key has the key's name and comes back with it.
+            "SELECT s.table_name AS tbl, \
+             CASE WHEN s.index_name = 'PRIMARY' THEN 'primary' ELSE s.index_name END AS name, \
+             CASE WHEN s.index_name = 'PRIMARY' THEN 'primary key' \
+             WHEN s.non_unique = 0 THEN 'unique' ELSE 'index' END AS kind, \
+             GROUP_CONCAT(s.column_name ORDER BY s.seq_in_index SEPARATOR ',') AS cols, \
+             NULL AS ref_tbl, NULL AS ref_cols, NULL AS on_delete \
+             FROM information_schema.statistics s WHERE s.table_schema = DATABASE() \
+             AND NOT EXISTS (SELECT 1 FROM information_schema.table_constraints c \
+             WHERE c.table_schema = s.table_schema AND c.table_name = s.table_name \
+             AND c.constraint_name = s.index_name AND c.constraint_type = 'FOREIGN KEY') \
+             GROUP BY s.table_name, s.index_name, s.non_unique \
+             UNION ALL \
+             SELECT k.table_name, k.constraint_name, 'foreign key', \
+             GROUP_CONCAT(k.column_name ORDER BY k.ordinal_position SEPARATOR ','), \
+             k.referenced_table_name, \
+             GROUP_CONCAT(k.referenced_column_name ORDER BY k.ordinal_position SEPARATOR ','), \
+             r.delete_rule \
+             FROM information_schema.key_column_usage k \
+             JOIN information_schema.referential_constraints r \
+             ON r.constraint_schema = k.table_schema AND r.table_name = k.table_name \
+             AND r.constraint_name = k.constraint_name \
+             WHERE k.table_schema = DATABASE() AND k.referenced_table_name IS NOT NULL \
+             GROUP BY k.table_name, k.constraint_name, k.referenced_table_name, r.delete_rule \
+             ORDER BY 1, 3, 2",
+        ),
+        // `NUMBER(p,s)` and `VARCHAR2(n)` as written in DDL; `NUMBER(*,0)` for
+        // `INTEGER`. `data_default` is a LONG, so it is trimmed below.
+        Dialect::Oracle => (
             "SELECT table_name AS tbl, column_name AS col, nullable, data_type || CASE \
              WHEN data_type = 'NUMBER' AND data_scale IS NOT NULL \
              THEN '(' || NVL(TO_CHAR(data_precision), '*') || ',' || data_scale || ')' \
-             WHEN char_used IS NOT NULL THEN '(' || char_length || ')' END AS ty \
+             WHEN char_used IS NOT NULL THEN '(' || char_length || ')' END AS ty, \
+             data_default AS dflt, \
+             CASE WHEN identity_column = 'YES' THEN 'auto_increment' END AS extra \
              FROM user_tab_columns WHERE table_name NOT LIKE 'BIN$%' \
-             ORDER BY table_name, column_id"
-        }
+             ORDER BY table_name, column_id",
+            // Plain B-tree indexes only: not LOB, function-based or primary key ones.
+            "SELECT c.table_name AS tbl, 'primary' AS name, 'primary key' AS kind, \
+             LISTAGG(cc.column_name, ',') WITHIN GROUP (ORDER BY cc.position) AS cols, \
+             NULL AS ref_tbl, NULL AS ref_cols, NULL AS on_delete \
+             FROM user_constraints c JOIN user_cons_columns cc \
+             ON cc.constraint_name = c.constraint_name \
+             WHERE c.constraint_type = 'P' AND c.table_name NOT LIKE 'BIN$%' \
+             GROUP BY c.table_name \
+             UNION ALL \
+             SELECT i.table_name, i.index_name, \
+             CASE WHEN i.uniqueness = 'UNIQUE' THEN 'unique' ELSE 'index' END, \
+             LISTAGG(ic.column_name, ',') WITHIN GROUP (ORDER BY ic.column_position), \
+             NULL, NULL, NULL \
+             FROM user_indexes i JOIN user_ind_columns ic ON ic.index_name = i.index_name \
+             WHERE i.index_type = 'NORMAL' AND i.table_name NOT LIKE 'BIN$%' \
+             AND NOT EXISTS (SELECT 1 FROM user_constraints p \
+             WHERE p.constraint_type = 'P' AND p.index_name = i.index_name) \
+             GROUP BY i.table_name, i.index_name, i.uniqueness \
+             UNION ALL \
+             SELECT c.table_name, c.constraint_name, 'foreign key', \
+             (SELECT LISTAGG(column_name, ',') WITHIN GROUP (ORDER BY position) \
+             FROM user_cons_columns WHERE constraint_name = c.constraint_name), \
+             r.table_name, \
+             (SELECT LISTAGG(column_name, ',') WITHIN GROUP (ORDER BY position) \
+             FROM user_cons_columns WHERE constraint_name = r.constraint_name), \
+             c.delete_rule \
+             FROM user_constraints c JOIN user_constraints r \
+             ON r.constraint_name = c.r_constraint_name \
+             WHERE c.constraint_type = 'R' AND c.table_name NOT LIKE 'BIN$%' \
+             ORDER BY 1, 3, 2",
+        ),
     };
-    let mut columns = Vec::new();
-    for row in db.select(sql, []).await?.iter() {
+    let mut lines = Vec::new();
+    for row in db.select(columns, []).await?.iter() {
         let nullable: String = row.get("nullable")?;
         let nullable = if nullable.starts_with('Y') {
             "null"
         } else {
             "not null"
         };
-        columns.push([
+        let extra: Option<String> = row.get("extra")?;
+        // Oracle reports an identity's sequence, and `DEFAULT NULL` after a `change()`.
+        let default: Option<String> = row.get("dflt")?;
+        let default = default.map(|d| d.trim().to_owned()).filter(|d| {
+            extra.as_deref() != Some("auto_increment")
+                && !d.is_empty()
+                && !d.eq_ignore_ascii_case("null")
+        });
+        lines.push(vec![
             row.get("tbl")?,
             row.get("col")?,
             nullable.to_owned(),
             row.get("ty")?,
+            default.unwrap_or_default(),
+            extra.unwrap_or_default(),
         ]);
     }
-    Ok(snapshot_text(db.dialect(), &columns))
+    for row in db.select(keys, []).await?.iter() {
+        let mut line: Vec<String> = vec![
+            row.get("tbl")?,
+            row.get("name")?,
+            row.get("kind")?,
+            row.get("cols")?,
+        ];
+        let on_delete: Option<String> = row.get("on_delete")?;
+        if let Some(rule) = on_delete {
+            let rule = match rule.to_lowercase().as_str() {
+                "cascade" => "cascade",
+                "set null" => "set null",
+                _ => "restrict",
+            };
+            line.extend([row.get("ref_tbl")?, row.get("ref_cols")?, rule.to_owned()]);
+        }
+        lines.push(line);
+    }
+    Ok(snapshot_text(db.dialect(), &lines))
 }
 
-fn snapshot_text(dialect: Dialect, columns: &[[String; 4]]) -> String {
+fn snapshot_text(dialect: Dialect, lines: &[Vec<String>]) -> String {
     let dialect = match dialect {
         Dialect::MySql => "mysql",
         Dialect::Oracle => "oracle",
     };
     let mut text = format!(
-        "# Schema snapshot for #[rustique::model]'s compile-time check (cargo feature `schema-check`).\n\
-         # Written by the `schema:snapshot` command; run it again after migrating.\n\
-         dialect\t{dialect}\n"
+        "# Schema snapshot for #[rustique::model]'s compile-time check (cargo feature `schema-check`)\n\
+         # and `make:migration --diff`. Written by the `schema:snapshot` command; run it again after migrating.\n\
+         dialect\t{dialect}\n\
+         version\t2\n"
     );
-    for column in columns {
-        text.push_str(&column.join("\t"));
+    for line in lines {
+        let fields = line.len() - line.iter().rev().take_while(|f| f.is_empty()).count();
+        // shortcut: a tab or newline inside a default breaks its line; Blueprint writes none.
+        text.push_str(&line[..fields].join("\t"));
         text.push('\n');
     }
     text
