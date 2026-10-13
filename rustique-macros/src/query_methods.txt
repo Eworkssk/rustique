@@ -75,10 +75,12 @@ where_column
 where_date
 where_doesnt_have
 where_doesnt_have_morph
+where_doesnt_have_typed
 where_exists
 where_group
 where_has
 where_has_morph
+where_has_typed
 where_in
 where_in_sub
 where_json
@@ -106,6 +108,7 @@ with_morph_count
 with_sum
 with_sum_where
 with_trashed
+with_typed
 with_where
 without_global_scope
 without_global_scopes

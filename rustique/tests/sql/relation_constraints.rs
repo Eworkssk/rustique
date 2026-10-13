@@ -1,4 +1,5 @@
-//! Relation-level `scope`, `latest_of_many` / `oldest_of_many`.
+//! Relation-level `scope`, `latest_of_many` / `oldest_of_many`, typed
+//! relation constraints.
 
 use chrono::NaiveDateTime;
 use rustique::{Dialect, Model, Query, QueryBuilder, Rel, Value};
@@ -33,6 +34,40 @@ struct Article {
 fn visible(q: Query<Article>) -> Query<Article> {
     q.where_("articles.published", "=", true)
         .or_where("articles.featured", "=", true)
+}
+
+#[rustique::scopes]
+impl Article {
+    fn scope_featured_or_newer(q: Query<Self>, id: i64) -> Query<Self> {
+        q.where_("articles.featured", "=", true)
+            .or_where("articles.id", ">", id)
+    }
+}
+
+#[test]
+fn typed_constraints_match_string_ones() {
+    let compile = |query: Query<Author>| {
+        let oracle = query.to_sql(Dialect::Oracle).unwrap();
+        let mysql = query.to_sql(Dialect::MySql).unwrap();
+        (mysql.sql, oracle.sql, oracle.binds)
+    };
+    // A scope groups its own `OR`s, hence the inner group.
+    let string = |q: rustique::QueryBuilder| {
+        q.where_group(|g| {
+            g.where_("articles.featured", "=", true)
+                .or_where("articles.id", ">", 3)
+        })
+    };
+    let typed = |q: Query<Article>| q.featured_or_newer(3);
+    assert_eq!(
+        compile(Author::query().where_has_typed(Author::VISIBLE_ARTICLES, typed)),
+        compile(Author::query().where_has("visible_articles", string)),
+    );
+    assert_eq!(
+        compile(Author::query().where_doesnt_have_typed(Author::LATEST_ARTICLE, typed)),
+        compile(Author::query().where_doesnt_have("latest_article", string)),
+    );
+    assert_eq!(Author::VISIBLE_ARTICLES.name(), "visible_articles");
 }
 
 fn author() -> Author {

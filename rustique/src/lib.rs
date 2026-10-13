@@ -96,7 +96,7 @@ pub use migrate::{MIGRATIONS_TABLE, Migration, MigrationFn, MigrationStatus, Mig
 pub use model::{
     BoxFuture, CREATED_AT, DELETED_AT, Factory, FromRelated, GlobalScope, HasFactory, Hooks,
     LazyLoading, Meta, Model, ModelChunks, ModelCursor, MorphTo, Observer, Pivot, Prunable, Query,
-    Rel, UPDATED_AT, prevent_lazy_loading,
+    Rel, RelName, UPDATED_AT, prevent_lazy_loading,
 };
 pub use query::{Chunks, CursorPage, JoinClause, Page, QueryBuilder, SimplePage};
 pub use row::Row;

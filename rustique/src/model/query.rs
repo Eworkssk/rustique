@@ -86,6 +86,45 @@ pub trait GlobalScope<M: Model>: 'static {
 /// Changes the eager-load query of one relation; see [`Query::with_where`].
 pub(crate) type Constraint = Arc<dyn Fn(QueryBuilder) -> QueryBuilder + Send + Sync>;
 
+/// A relation of model `M` that loads `R` models: the typed form of a
+/// relation name. `#[rustique::model]` generates one per relation field as an
+/// associated constant, `User::POSTS` for `posts`; see
+/// [`Query::with_typed`].
+pub struct RelName<M, R> {
+    name: &'static str,
+    models: PhantomData<fn() -> (M, R)>,
+}
+
+impl<M, R> RelName<M, R> {
+    /// Called by code that `#[rustique::model]` generates.
+    #[doc(hidden)]
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            models: PhantomData,
+        }
+    }
+
+    /// The relation's name, as the string-based methods take it.
+    pub const fn name(self) -> &'static str {
+        self.name
+    }
+}
+
+impl<M, R> Clone for RelName<M, R> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<M, R> Copy for RelName<M, R> {}
+
+impl<M, R> fmt::Debug for RelName<M, R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("RelName").field(&self.name).finish()
+    }
+}
+
 /// A relation path to eager-load, maybe with a constraint on its last relation.
 #[derive(Clone)]
 pub(crate) struct EagerLoad {
@@ -398,6 +437,29 @@ impl<M: Model> Query<M> {
         self
     }
 
+    /// [`with_where`](Self::with_where) with a typed relation: `build` gets
+    /// the related model's [`Query`], so its `#[rustique::scopes]` work:
+    ///
+    /// ```
+    /// # use rustique::prelude::*;
+    /// # #[rustique::model(table = "users")]
+    /// # #[derive(Debug, Clone, Default)]
+    /// # struct User { id: i64, #[rustique(has_many(Post))] posts: Rel<Vec<Post>> }
+    /// # #[rustique::model(table = "posts")]
+    /// # #[derive(Debug, Clone, Default)]
+    /// # struct Post { id: i64, user_id: i64 }
+    /// let users = User::query().with_typed(User::POSTS, |q| q.where_("posts.published", "=", true));
+    /// ```
+    ///
+    /// Nested paths such as `"posts.comments"` stay string-based.
+    pub fn with_typed<R: Model>(
+        self,
+        relation: RelName<M, R>,
+        build: impl Fn(Query<R>) -> Query<R> + Send + Sync + 'static,
+    ) -> Self {
+        self.with_where(relation.name(), move |q| typed(q, &build))
+    }
+
     /// Eager-loads the `morph_to` relation `relation` as [`with`](Self::with)
     /// does, counting relations of the loaded models per type, like
     /// Eloquent's `morphWithCount`: `counts` pairs a morph alias with a
@@ -453,6 +515,25 @@ impl<M: Model> Query<M> {
         build: impl FnOnce(QueryBuilder) -> QueryBuilder,
     ) -> Self {
         self.has(relation, build, true)
+    }
+
+    /// [`where_has`](Self::where_has) with a typed relation; `build` gets
+    /// the related model's [`Query`], as in [`with_typed`](Self::with_typed).
+    pub fn where_has_typed<R: Model>(
+        self,
+        relation: RelName<M, R>,
+        build: impl FnOnce(Query<R>) -> Query<R>,
+    ) -> Self {
+        self.has(relation.name(), |q| typed(q, build), false)
+    }
+
+    /// [`where_doesnt_have`](Self::where_doesnt_have) with a typed relation.
+    pub fn where_doesnt_have_typed<R: Model>(
+        self,
+        relation: RelName<M, R>,
+        build: impl FnOnce(Query<R>) -> Query<R>,
+    ) -> Self {
+        self.has(relation.name(), |q| typed(q, build), true)
     }
 
     /// Keeps models whose `morph_to` relation points at a model of one of
@@ -1209,6 +1290,22 @@ pub fn scope<M: Model>(query: Query<M>, apply: impl FnOnce(Query<M>) -> Query<M>
     let mut query = apply(query);
     query.builder = regroup(std::mem::take(&mut query.builder), before);
     query
+}
+
+/// Runs a typed relation constraint on the related query's builder. The
+/// caller already applied `R`'s global scopes and soft-delete filter, so the
+/// wrapping `Query` adds neither.
+fn typed<R: Model>(
+    builder: QueryBuilder,
+    build: impl FnOnce(Query<R>) -> Query<R>,
+) -> QueryBuilder {
+    let query = Query {
+        builder,
+        trashed: Trashed::With,
+        scopes: Scopes::None,
+        ..Query::new()
+    };
+    build(query).builder
 }
 
 /// Applies `apply` to `builder` grouped like a [`scope`].
