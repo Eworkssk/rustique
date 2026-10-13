@@ -382,8 +382,10 @@ impl<M: Model> Query<M> {
     /// ```
     ///
     /// For `"posts.comments"`, `build` changes the comments query; the posts
-    /// load unfiltered. The query runs once for all parents, so a `limit`
-    /// in `build` limits the related rows of all parents together.
+    /// load unfiltered. A `limit` / `offset` in `build` applies per parent,
+    /// as in Eloquent: the related rows are numbered per parent in the
+    /// order of `build` (the related key when it sets none); see
+    /// [`QueryBuilder::limit_per`].
     pub fn with_where(
         mut self,
         relation: impl Into<String>,

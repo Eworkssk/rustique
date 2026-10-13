@@ -52,6 +52,8 @@ pub struct QueryBuilder {
     pub(crate) orders: Vec<Order>,
     pub(crate) limit: Option<u64>,
     pub(crate) offset: Option<u64>,
+    /// `limit_per`: columns whose groups `limit` / `offset` apply to.
+    pub(crate) limit_per: Vec<String>,
     pub(crate) lock: Option<Lock>,
     pub(crate) unions: Vec<Union>,
     /// First mistake made while building, reported at compile time.
@@ -255,6 +257,18 @@ impl QueryBuilder {
     /// Skips the first `offset` rows.
     pub fn offset(mut self, offset: u64) -> Self {
         self.offset = Some(offset);
+        self
+    }
+
+    /// Applies [`limit`](Self::limit) and [`offset`](Self::offset) to each
+    /// group of rows sharing `columns` instead of to the whole result, like
+    /// Laravel's `groupLimit`: the rows are numbered with `ROW_NUMBER() OVER
+    /// (PARTITION BY columns ORDER BY <the query's order>)` in a subquery and
+    /// the outer query keeps the numbers in range, ordered by them. Needs an
+    /// order. Eager loads use it for a constraint's `limit`, so
+    /// `with_where("posts", |q| q.order_by_desc("id").limit(3))` loads 3 posts per user.
+    pub fn limit_per(mut self, columns: impl IntoIterator<Item: Into<String>>) -> Self {
+        self.limit_per = columns.into_iter().map(Into::into).collect();
         self
     }
 

@@ -1,9 +1,9 @@
 //! Relation-level `scope`, `latest_of_many` / `oldest_of_many`.
 
 use chrono::NaiveDateTime;
-use rustique::{Dialect, Model, Query, Rel, Value};
+use rustique::{Dialect, Model, Query, QueryBuilder, Rel, Value};
 
-use crate::binds;
+use crate::{assert_sql, binds, error};
 
 #[rustique::model(table = "authors")]
 #[derive(Debug, Clone, Default)]
@@ -15,6 +15,8 @@ struct Author {
     latest_article: Rel<Option<Article>>,
     #[rustique(has_one(Article, oldest_of_many = "published_at", scope = |q| q.where_("articles.published", "=", true)))]
     first_published: Rel<Option<Article>>,
+    #[rustique(has_one(Article, of_many(published_at = "max", id = "min")))]
+    newest_first_id: Rel<Option<Article>>,
 }
 
 #[rustique::model(table = "articles", soft_deletes)]
@@ -109,4 +111,49 @@ fn oldest_of_many_by_column_ranks_inside_the_scope() {
             .sql
             .contains(r#"ROW_NUMBER() OVER (PARTITION BY "ARTICLES"."AUTHOR_ID" ORDER BY "ARTICLES"."PUBLISHED_AT" ASC"#)
     );
+}
+
+#[test]
+fn of_many_ranks_by_several_columns() {
+    let query = author().newest_first_id().into_builder();
+    assert_sql(
+        &query,
+        "SELECT * FROM `articles` WHERE `articles`.`id` IN (SELECT `orm_ranked`.`orm_key` FROM \
+         (SELECT `articles`.`id` AS `orm_key`, ROW_NUMBER() OVER (PARTITION BY `articles`.`author_id` \
+         ORDER BY `articles`.`published_at` DESC, `articles`.`id` ASC) AS `orm_rank` FROM `articles` \
+         WHERE `articles`.`deleted_at` IS NULL AND `articles`.`published_at` IS NOT NULL) `orm_ranked` \
+         WHERE `orm_ranked`.`orm_rank` = ?) AND `articles`.`author_id` = ? AND `articles`.`deleted_at` IS NULL",
+        r#"SELECT * FROM "ARTICLES" WHERE "ARTICLES"."ID" IN (SELECT "ORM_RANKED"."ORM_KEY" FROM (SELECT "ARTICLES"."ID" AS "ORM_KEY", ROW_NUMBER() OVER (PARTITION BY "ARTICLES"."AUTHOR_ID" ORDER BY "ARTICLES"."PUBLISHED_AT" DESC, "ARTICLES"."ID" ASC) AS "ORM_RANK" FROM "ARTICLES" WHERE "ARTICLES"."DELETED_AT" IS NULL AND "ARTICLES"."PUBLISHED_AT" IS NOT NULL) "ORM_RANKED" WHERE "ORM_RANKED"."ORM_RANK" = :1) AND "ARTICLES"."AUTHOR_ID" = :2 AND "ARTICLES"."DELETED_AT" IS NULL"#,
+    );
+}
+
+#[test]
+fn limit_per_numbers_rows_per_group() {
+    let query = QueryBuilder::table("articles")
+        .where_in("articles.author_id", [1, 2])
+        .order_by_desc("articles.published_at")
+        .offset(1)
+        .limit(2)
+        .limit_per(["articles.author_id"]);
+    assert_sql(
+        &query,
+        "SELECT * FROM (SELECT `articles`.*, ROW_NUMBER() OVER (PARTITION BY `articles`.`author_id` \
+         ORDER BY `articles`.`published_at` DESC) AS `orm_row` FROM `articles` WHERE `articles`.`author_id` IN (?, ?)) \
+         `orm_limited` WHERE `orm_limited`.`orm_row` > ? AND `orm_limited`.`orm_row` <= ? ORDER BY `orm_limited`.`orm_row` ASC",
+        r#"SELECT * FROM (SELECT "ARTICLES".*, ROW_NUMBER() OVER (PARTITION BY "ARTICLES"."AUTHOR_ID" ORDER BY "ARTICLES"."PUBLISHED_AT" DESC) AS "ORM_ROW" FROM "ARTICLES" WHERE "ARTICLES"."AUTHOR_ID" IN (:1, :2)) "ORM_LIMITED" WHERE "ORM_LIMITED"."ORM_ROW" > :3 AND "ORM_LIMITED"."ORM_ROW" <= :4 ORDER BY "ORM_LIMITED"."ORM_ROW" ASC"#,
+    );
+    assert_eq!(
+        binds(&query),
+        [Value::I64(1), Value::I64(2), Value::U64(1), Value::U64(3)]
+    );
+
+    // Without a limit it changes nothing; a limit needs an order.
+    let plain = QueryBuilder::table("articles").limit_per(["author_id"]);
+    assert_sql(
+        &plain,
+        "SELECT * FROM `articles`",
+        r#"SELECT * FROM "ARTICLES""#,
+    );
+    let unordered = plain.limit(2);
+    assert!(error(&unordered, Dialect::MySql).contains("needs an order"));
 }

@@ -17,6 +17,12 @@ struct Author {
     latest_article: Rel<Option<Article>>,
     #[rustique(has_one(Article, foreign_key = "author_id", oldest_of_many = "published_at", scope = published))]
     first_published: Rel<Option<Article>>,
+    #[rustique(has_one(
+        Article,
+        foreign_key = "author_id",
+        of_many(published = "max", published_at = "min")
+    ))]
+    best_article: Rel<Option<Article>>,
     #[rustique(has_many(Article, foreign_key = "author_id"))]
     articles: Rel<Vec<Article>>,
     #[rustique(count)]
@@ -131,6 +137,22 @@ async fn relation_constraints() {
             Some("a2")
         );
         assert_eq!(title(bob.first_published.loaded().unwrap()), None);
+        // `of_many`: published first, then the oldest date; NULL dates never win.
+        let best = Author::query()
+            .with("best_article")
+            .order_by("id")
+            .get(&db)
+            .await
+            .unwrap_or_else(|e| panic!("{dialect}: {e}"));
+        let best: Vec<_> = best
+            .iter()
+            .map(|a| title(a.best_article.loaded().unwrap()))
+            .collect();
+        assert_eq!(
+            best,
+            [Some("a2".to_owned()), Some("b1".to_owned()), None],
+            "{dialect}"
+        );
 
         // Lazy queries and `where_has` agree.
         let latest = ann.latest_article().get(&db).await.unwrap();

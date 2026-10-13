@@ -217,6 +217,8 @@ let q = QueryBuilder::table("users")
 # Ok(()) }
 ```
 
+`limit_per(["user_id"])` applies `limit` / `offset` to each group of rows sharing those columns, like Laravel's `groupLimit`: `SELECT * FROM (SELECT ..., ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY <the query's order>) AS orm_row FROM ...) orm_limited WHERE orm_row <= ? ORDER BY orm_row`. The query needs an order. Eager loads use it for a `with_where` limit.
+
 ## Unions
 
 ```rust

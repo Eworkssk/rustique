@@ -12,10 +12,10 @@ Checked against the code on 2026-10-11, after the parity pass that closed the ga
 | hasManyThrough, hasOneThrough | `has_many_through`, `has_one_through` | Have |
 | morphToMany / morphedByMany | `morph_to_many`, `morphed_by_many`, with the full pivot API | Have |
 | withCount, withSum, withAvg, withMin, withMax, withExists | `with_count(_where)`, `with_sum`, `with_avg`, `with_min`, `with_max`, `with_exists(_where)` into `#[rustique(count)]` / `#[rustique(aggregate)]` fields | Have; each with a `_where` closure variant and `"relation as alias"` naming |
-| eager-load constraints, `with('posts' => fn)` | `with_where` | Have; no per-parent limits |
+| eager-load constraints, `with('posts' => fn)` | `with_where` | Have; `limit` / `offset` apply per parent (`ROW_NUMBER() OVER`) |
 | `with('posts:id,title')` | `with("posts:id,title")` | Have |
 | `where` on a relation definition | `scope = fn` in the relation attribute | Have |
-| latestOfMany, oldestOfMany, ofMany | `latest_of_many [= "column"]`, `oldest_of_many` on `has_one` / `morph_one` | Have; one column plus the key, single-column keys |
+| latestOfMany, oldestOfMany, ofMany | `latest_of_many [= "column"]`, `oldest_of_many`, `of_many(col = "max", ...)` on `has_one` / `morph_one` | Have; single-column keys |
 | pivot extra columns, `withPivot`, pivot timestamps | `pivot = [...]`, `pivot_timestamps`, `attach_with`, `update_existing` | Have |
 | sync, syncWithoutDetaching, toggle | `sync`, `sync_without_detaching`, `toggle`, `attach`, `detach` | Have |
 | whereHas / withCount on self-relations | inner table aliased `orm_self` | Have |
