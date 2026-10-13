@@ -5,7 +5,7 @@
 DB=oracle ROUNDS=3 ./bench/run.sh  # Oracle; writes bench/RESULTS-oracle.md
 ```
 
-Needs Docker (MySQL and Oracle from `../docker-compose.yml`), the `mysql` client, cargo, PHP 8.2+ with `pdo_mysql` (and `oci8` for Oracle), Oracle Instant Client for Oracle, composer and python3. `ROUNDS` defaults to 5.
+Needs Docker (MySQL and Oracle from `../docker-compose.yml`), the `mysql` client, cargo, PHP 8.2+ with `pdo_mysql` (and `oci8` for Oracle), Oracle Instant Client for Oracle, composer and python3. `ROUNDS` defaults to 5. Once both results files exist, `run.sh` also redraws the README chart `assets/bench.svg` with `chart.py`.
 
 On Oracle, diesel runs through the third-party [`diesel-oci`](https://crates.io/crates/diesel-oci) backend and Eloquent through [`yajra/laravel-oci8`](https://github.com/yajra/laravel-oci8). `schema-oracle.sql` loads the same rows with the column types both rustique's and Laravel's migrations create there: `NUMBER(19)` identity keys, `TIMESTAMP(6)`, and `CLOB` for `body` and for the JSON `payload` (with an `IS JSON` check). It ends with `DBMS_STATS.GATHER_SCHEMA_STATS`.
 

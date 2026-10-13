@@ -16,8 +16,7 @@
 
 [Documentation](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/README.md) ·
 [Getting started](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/getting-started.md) ·
-[Cheat sheet](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/README.md#cheat-sheet) ·
-[Design](https://github.com/Eworkssk/rustique/blob/main/PLAN.md)
+[Cheat sheet](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/README.md#cheat-sheet)
 
 </div>
 
@@ -151,6 +150,17 @@ impl HasFactory for User {
 }
 ```
 
+## Benchmarks
+
+Mean time per operation against [diesel](https://diesel.rs) and Laravel Eloquent on the same data (100,000 users, 1M posts).
+Bars are scaled per scenario, so compare within a group.
+
+<img src="https://raw.githubusercontent.com/Eworkssk/rustique/main/assets/bench.svg" alt="Benchmark chart: rustique, diesel and Eloquent on MySQL and Oracle" width="760">
+
+All scenarios, percentiles and memory: [MySQL](https://github.com/Eworkssk/rustique/blob/main/bench/RESULTS-mysql.md) ·
+[Oracle](https://github.com/Eworkssk/rustique/blob/main/bench/RESULTS-oracle.md) ·
+[how it is measured](https://github.com/Eworkssk/rustique/blob/main/bench/README.md).
+
 ## Documentation
 
 The pages follow the Laravel Eloquent docs layout. Every code block compiles as a doctest.
@@ -195,12 +205,12 @@ cargo clippy --workspace --all-targets --all-features
 ```
 
 Layout: [`rustique/`](https://github.com/Eworkssk/rustique/blob/main/rustique) is the library, [`rustique-macros/`](https://github.com/Eworkssk/rustique/blob/main/rustique-macros) the proc macros,
-[`rustique/docs/`](https://github.com/Eworkssk/rustique/blob/main/rustique/docs) the user guide, and [`PLAN.md`](https://github.com/Eworkssk/rustique/blob/main/PLAN.md) the design and the decisions behind it.
+[`rustique/docs/`](https://github.com/Eworkssk/rustique/blob/main/rustique/docs) the user guide, and [`bench/`](https://github.com/Eworkssk/rustique/blob/main/bench) the benchmark against diesel and Eloquent.
 
 ## Status
 
 Pre-release. The API covers the full model, relation, migration and query surface described above and is
-tested against MySQL 8.4 and Oracle XE 21c. See [`PLAN.md`](https://github.com/Eworkssk/rustique/blob/main/PLAN.md#11-open-items) for what is still open.
+tested against MySQL 8.4 and Oracle XE 21c.
 
 ## License
 

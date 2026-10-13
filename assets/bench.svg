@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 938" width="860" height="938" role="img" aria-label="Benchmark: rustique vs diesel vs Eloquent on MySQL and Oracle">
+<rect x="0" y="19" width="12" height="12" rx="2" fill="#E2672A"/>
+<text x="18" y="30" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8B949E" text-anchor="start">rustique</text>
+<rect x="130" y="19" width="12" height="12" rx="2" fill="#2DD4BF"/>
+<text x="148" y="30" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8B949E" text-anchor="start">diesel</text>
+<rect x="240" y="19" width="12" height="12" rx="2" fill="#8B949E"/>
+<text x="258" y="30" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8B949E" text-anchor="start">Eloquent (OPcache JIT)</text>
+<text x="0" y="80" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="18" font-weight="700" fill="#C2410C" text-anchor="start">MySQL 8.4: mean time per operation, shorter is faster</text>
+<text x="238" y="125.0" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8B949E" text-anchor="end">find_by_pk</text>
+<rect x="250" y="98" width="253.5" height="12" rx="2" fill="#E2672A"/>
+<text x="509.5" y="109" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">136 µs</text>
+<rect x="250" y="114" width="190.1" height="12" rx="2" fill="#2DD4BF"/>
+<text x="446.1" y="125" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">102 µs</text>
+<rect x="250" y="130" width="520.0" height="12" rx="2" fill="#8B949E"/>
+<text x="776.0" y="141" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">279 µs</text>
+<text x="238" y="191.0" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8B949E" text-anchor="end">insert_single</text>
+<rect x="250" y="164" width="440.0" height="12" rx="2" fill="#E2672A"/>
+<text x="696.0" y="175" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">1.1 ms</text>
+<rect x="250" y="180" width="480.0" height="12" rx="2" fill="#2DD4BF"/>
+<text x="736.0" y="191" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">1.2 ms</text>
+<rect x="250" y="196" width="520.0" height="12" rx="2" fill="#8B949E"/>
+<text x="776.0" y="207" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">1.3 ms</text>
+<text x="238" y="257.0" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8B949E" text-anchor="end">update_single</text>
+<rect x="250" y="230" width="408.6" height="12" rx="2" fill="#E2672A"/>
+<text x="664.6" y="241" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">1.1 ms</text>
+<rect x="250" y="246" width="445.7" height="12" rx="2" fill="#2DD4BF"/>
+<text x="701.7" y="257" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">1.2 ms</text>
+<rect x="250" y="262" width="520.0" height="12" rx="2" fill="#8B949E"/>
+<text x="776.0" y="273" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">1.4 ms</text>
+<text x="238" y="323.0" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8B949E" text-anchor="end">fetch_10000_rows</text>
+<rect x="250" y="296" width="247.8" height="12" rx="2" fill="#E2672A"/>
+<text x="503.8" y="307" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">21.3 ms</text>
+<rect x="250" y="312" width="71.0" height="12" rx="2" fill="#2DD4BF"/>
+<text x="327.0" y="323" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">6.1 ms</text>
+<rect x="250" y="328" width="520.0" height="12" rx="2" fill="#8B949E"/>
+<text x="776.0" y="339" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">44.7 ms</text>
+<text x="238" y="389.0" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8B949E" text-anchor="end">eager_1000_users_10000_posts</text>
+<rect x="250" y="362" width="200.2" height="12" rx="2" fill="#E2672A"/>
+<text x="456.2" y="373" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">31.5 ms</text>
+<rect x="250" y="378" width="99.8" height="12" rx="2" fill="#2DD4BF"/>
+<text x="355.8" y="389" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">15.7 ms</text>
+<rect x="250" y="394" width="520.0" height="12" rx="2" fill="#8B949E"/>
+<text x="776.0" y="405" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">81.8 ms</text>
+<text x="238" y="455.0" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8B949E" text-anchor="end">bulk_insert_10000</text>
+<rect x="250" y="428" width="293.8" height="12" rx="2" fill="#E2672A"/>
+<text x="549.8" y="439" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">86.0 ms</text>
+<rect x="250" y="444" width="415.5" height="12" rx="2" fill="#2DD4BF"/>
+<text x="671.5" y="455" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">121.6 ms</text>
+<rect x="250" y="460" width="520.0" height="12" rx="2" fill="#8B949E"/>
+<text x="776.0" y="471" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">152.2 ms</text>
+<text x="0" y="524" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="18" font-weight="700" fill="#C2410C" text-anchor="start">Oracle XE 21c: mean time per operation, shorter is faster</text>
+<text x="238" y="569.0" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8B949E" text-anchor="end">find_by_pk</text>
+<rect x="250" y="542" width="434.1" height="12" rx="2" fill="#E2672A"/>
+<text x="690.1" y="553" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">192 µs</text>
+<rect x="250" y="558" width="345.9" height="12" rx="2" fill="#2DD4BF"/>
+<text x="601.9" y="569" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">153 µs</text>
+<rect x="250" y="574" width="520.0" height="12" rx="2" fill="#8B949E"/>
+<text x="776.0" y="585" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">230 µs</text>
+<text x="238" y="635.0" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8B949E" text-anchor="end">insert_single</text>
+<rect x="250" y="608" width="479.3" height="12" rx="2" fill="#E2672A"/>
+<text x="735.3" y="619" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">601 µs</text>
+<rect x="250" y="624" width="482.5" height="12" rx="2" fill="#2DD4BF"/>
+<text x="738.5" y="635" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">605 µs</text>
+<rect x="250" y="640" width="520.0" height="12" rx="2" fill="#8B949E"/>
+<text x="776.0" y="651" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">652 µs</text>
+<text x="238" y="701.0" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8B949E" text-anchor="end">update_single</text>
+<rect x="250" y="674" width="443.2" height="12" rx="2" fill="#E2672A"/>
+<text x="699.2" y="685" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">554 µs</text>
+<rect x="250" y="690" width="451.2" height="12" rx="2" fill="#2DD4BF"/>
+<text x="707.2" y="701" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">564 µs</text>
+<rect x="250" y="706" width="520.0" height="12" rx="2" fill="#8B949E"/>
+<text x="776.0" y="717" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">650 µs</text>
+<text x="238" y="767.0" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8B949E" text-anchor="end">fetch_10000_rows</text>
+<rect x="250" y="740" width="184.9" height="12" rx="2" fill="#E2672A"/>
+<text x="440.9" y="751" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">29.8 ms</text>
+<rect x="250" y="756" width="215.9" height="12" rx="2" fill="#2DD4BF"/>
+<text x="471.9" y="767" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">34.8 ms</text>
+<rect x="250" y="772" width="520.0" height="12" rx="2" fill="#8B949E"/>
+<text x="776.0" y="783" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">83.8 ms</text>
+<text x="238" y="833.0" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8B949E" text-anchor="end">eager_1000_users_10000_posts</text>
+<rect x="250" y="806" width="9.4" height="12" rx="2" fill="#E2672A"/>
+<text x="265.4" y="817" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">48.9 ms</text>
+<rect x="250" y="822" width="13.1" height="12" rx="2" fill="#2DD4BF"/>
+<text x="269.1" y="833" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">67.7 ms</text>
+<rect x="250" y="838" width="520.0" height="12" rx="2" fill="#8B949E"/>
+<text x="776.0" y="849" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">2,693.0 ms</text>
+<text x="238" y="899.0" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8B949E" text-anchor="end">bulk_insert_10000</text>
+<rect x="250" y="872" width="87.9" height="12" rx="2" fill="#E2672A"/>
+<text x="343.9" y="883" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">1,219.2 ms</text>
+<rect x="250" y="888" width="88.0" height="12" rx="2" fill="#2DD4BF"/>
+<text x="344.0" y="899" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">1,220.9 ms</text>
+<rect x="250" y="904" width="520.0" height="12" rx="2" fill="#8B949E"/>
+<text x="776.0" y="915" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" font-weight="400" fill="#8B949E" text-anchor="start">7,211.0 ms</text>
+</svg>

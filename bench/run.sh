@@ -86,4 +86,5 @@ fi
     echo
     python3 report.py "$RESULTS"
 } > "RESULTS-$DB.md"
+[ -f RESULTS-mysql.md ] && [ -f RESULTS-oracle.md ] && python3 chart.py > ../assets/bench.svg
 cat "RESULTS-$DB.md"
