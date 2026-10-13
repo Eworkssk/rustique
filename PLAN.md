@@ -289,7 +289,7 @@ Final review (2026-10-12): fixed `Model::increment` leaving unsigned and decimal
 
 Everything left undone, gathered from the phases above:
 
-- Schema diff (`make:migration --diff`): the snapshot is the desired schema, so it needs a version-2 `rustique-schema.txt`. Not diffed: check constraints, comments, Oracle sequences, views (listed as tables), cross-schema foreign keys; `json`/`long_text`/`time` on Oracle and `uuid` on both read back as `text`/`string`/`char`.
+- Schema diff (`make:migration --diff`): the snapshot is the desired schema, so it needs a version-2 `rustique-schema.txt`. Not diffed: check constraints, comments, Oracle sequences, cross-schema foreign keys; a table only in the database comes out as a `// TODO` drop, never a real one; `json`/`long_text`/`time` on Oracle and `uuid` on both read back as `text`/`string`/`char`.
 - Typed relation constraints (`with_typed`, `where_has_typed`, `where_doesnt_have_typed` with `Model::REL` constants): nested paths, `"rel:cols"` lists, `morph_to` and the aggregate forms (`with_count`, `with_sum`, ...) stay string-based.
-- Schema check: the related table of a relation is guessed as the snake_case plural of the type name; lone column names in scopes and `sql!` with `WITH`, aliases or unqualified columns are skipped (`shortcut:` comments in `rustique-macros/src/schema_check.rs`).
+- Schema check: the related table of a relation comes from the snapshot's foreign keys, falling back to the snake_case plural of the type name when none or several match (morph relations always guess); lone column names in scopes and `sql!` with `WITH`, aliases or unqualified columns are skipped (`shortcut:` comments in `rustique-macros/src/schema_check.rs`).
 - CI's Oracle 19c job (`doctorkirk/oracle-19c`, unofficial image, last pushed 2021) has not run yet; the first run may expose 19c-only test failures.
