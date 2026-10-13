@@ -1,4 +1,4 @@
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use rust_decimal::Decimal;
 use rustique::{Db, Error, Executor, MIGRATIONS_TABLE, MigrationStatus, Migrator, Model, Schema};
 
@@ -17,6 +17,61 @@ struct Item {
     seen_at: Option<NaiveDateTime>,
     data: Option<serde_json::Value>,
     blob: Option<Vec<u8>>,
+}
+
+#[rustique::model(table = "orm_s_shifts")]
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Shift {
+    id: i64,
+    starts: Option<NaiveTime>,
+    touched: Option<NaiveDateTime>,
+}
+
+#[tokio::test]
+async fn time_and_use_current_on_update_columns() {
+    for db in databases().await {
+        Schema::drop_if_exists(&db, "orm_s_shifts").await.unwrap();
+        Schema::create(&db, "orm_s_shifts", |t| {
+            t.id();
+            t.time("starts").nullable();
+            t.datetime("touched").nullable().use_current_on_update();
+        })
+        .await
+        .unwrap();
+
+        let old = NaiveDate::from_ymd_opt(2020, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0);
+        let shift = Shift::create(
+            &db,
+            Shift {
+                starts: NaiveTime::from_hms_micro_opt(8, 30, 15, 123_456),
+                touched: old,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(Shift::find_or_fail(&db, shift.id).await.unwrap(), shift);
+
+        db.statement(
+            "UPDATE orm_s_shifts SET starts = ? WHERE id = ?",
+            [
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap().into(),
+                shift.id.into(),
+            ],
+        )
+        .await
+        .unwrap();
+        let after = Shift::find_or_fail(&db, shift.id).await.unwrap();
+        assert_eq!(after.starts, NaiveTime::from_hms_opt(9, 0, 0));
+        if db.dialect() == rustique::Dialect::MySql {
+            assert!(after.touched > old, "{:?}", after.touched);
+        } else {
+            assert_eq!(after.touched, old); // Oracle has no ON UPDATE
+        }
+        Schema::drop(&db, "orm_s_shifts").await.unwrap();
+    }
 }
 
 #[tokio::test]

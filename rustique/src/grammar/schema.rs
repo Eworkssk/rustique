@@ -217,6 +217,16 @@ fn column_definition(w: &mut Writer, c: &Column) {
         w.push(" DEFAULT ");
         default(w, c);
     }
+    if mysql && c.on_update_current {
+        if c.ty == ColumnType::DateTime {
+            w.push(" ON UPDATE CURRENT_TIMESTAMP(6)");
+        } else {
+            w.fail(Error::InvalidQuery(format!(
+                "column `{}`: `use_current_on_update` needs a datetime column",
+                c.name
+            )));
+        }
+    }
     if !c.nullable {
         w.push(" NOT NULL");
     }
