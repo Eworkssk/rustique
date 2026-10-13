@@ -25,8 +25,9 @@
 //! - `make:migration <name> [--path <dir>]`: writes a migration module to
 //!   `<dir>` (default `src/migrations`), named like
 //!   `m2026_10_11_093000_create_users_table.rs`; a `create_<table>_table`
-//!   name gets a `Schema::create` skeleton. Register it in
-//!   [`migrations!`](crate::migrations) yourself.
+//!   name gets a `Schema::create` skeleton. It also adds `mod <module>;` and the
+//!   module to the [`migrations!`](crate::migrations) list in `<dir>/mod.rs`
+//!   (a hint is printed instead when that file has no such list).
 //! - `schema:snapshot [--path <file>]`: writes the columns of every table to
 //!   `<file>` (default `rustique-schema.txt`), for the compile-time check of
 //!   `#[rustique::model]` structs (cargo feature `schema-check`). Run it from the
@@ -220,10 +221,66 @@ fn make_migration(dir: &Path, name: &str) -> Result<Vec<String>> {
         .open(&file)
         .map_err(io)?;
     out.write_all(template(name).as_bytes()).map_err(io)?;
-    Ok(vec![
-        format!("Created: {}", file.display()),
-        format!("Register it: `mod {module};` and `{module}` in `rustique::migrations![...]`"),
-    ])
+    let mut lines = vec![format!("Created: {}", file.display())];
+    let mod_rs = dir.join("mod.rs");
+    match fs::read_to_string(&mod_rs)
+        .ok()
+        .and_then(|s| register(&s, &module))
+    {
+        Some(updated) => {
+            fs::write(&mod_rs, updated)
+                .map_err(|e| Error::Config(format!("cannot write {}: {e}", mod_rs.display())))?;
+            lines.push(format!("Registered in: {}", mod_rs.display()));
+        }
+        None => lines.push(format!(
+            "Register it: `mod {module};` and `{module}` in `rustique::migrations![...]`"
+        )),
+    }
+    Ok(lines)
+}
+
+/// Adds `mod <module>;` and the module to the `migrations![...]` list of `src`.
+/// `None` when there is no list or the module is already in the file.
+fn register(src: &str, module: &str) -> Option<String> {
+    if src.contains(module) {
+        return None;
+    }
+    let open = src.find("migrations!")? + "migrations!".len();
+    let open = open + src[open..].find('[')?;
+    let close = open + src[open..].find(']')?;
+    let inner = &src[open + 1..close];
+    let body = inner.trim_end();
+    let entry = if body.trim().is_empty() {
+        module.to_owned()
+    } else {
+        let multiline = body.contains('\n');
+        let last = body.lines().next_back().unwrap_or_default();
+        let indent = &last[..last.len() - last.trim_start().len()];
+        let sep = match (multiline, body.ends_with(',')) {
+            (true, true) => format!("\n{indent}"),
+            (true, false) => format!(",\n{indent}"),
+            (false, true) => " ".to_owned(),
+            (false, false) => ", ".to_owned(),
+        };
+        let comma = if body.ends_with(',') { "," } else { "" };
+        format!("{body}{sep}{module}{comma}")
+    };
+    let mut out = format!(
+        "{}{}{}",
+        &src[..open + 1],
+        entry,
+        &src[open + 1 + body.len()..close]
+    );
+    out.push_str(&src[close..]);
+    // Keep the declaration with the other `mod` lines, else put it first.
+    let decl = format!("mod {module};\n");
+    let padded = format!("\n{src}"); // so a `mod` on the first line matches too
+    let at = padded[..=open]
+        .rfind("\nmod ")
+        .and_then(|i| padded[i + 1..].find('\n').map(|n| i + n + 1))
+        .unwrap_or(0);
+    out.insert_str(at, &decl);
+    Some(out)
 }
 
 fn template(name: &str) -> String {
@@ -298,6 +355,51 @@ mod tests {
             .unwrap();
         let source = fs::read_to_string(lines[0].strip_prefix("Created: ").unwrap()).unwrap();
         assert!(source.contains("pub async fn down"), "{source}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn registers_modules() {
+        let m = "m1_x";
+        let run = |src: &str| register(src, m).unwrap();
+        assert_eq!(
+            run("pub fn all() { migrations![] }"),
+            "mod m1_x;\npub fn all() { migrations![m1_x] }"
+        );
+        assert_eq!(
+            run("mod a;\n\nfn all() { migrations![a] }\n"),
+            "mod a;\nmod m1_x;\n\nfn all() { migrations![a, m1_x] }\n"
+        );
+        assert_eq!(
+            run("mod a;\nfn all() { migrations![a,] }"),
+            "mod a;\nmod m1_x;\nfn all() { migrations![a, m1_x,] }"
+        );
+        assert_eq!(
+            run("mod a;\nfn all() {\n    migrations![\n        a,\n    ]\n}"),
+            "mod a;\nmod m1_x;\nfn all() {\n    migrations![\n        a,\n        m1_x,\n    ]\n}"
+        );
+        assert_eq!(register("mod m1_x;\nmigrations![m1_x]", m), None);
+        assert_eq!(register("fn all() {}", m), None);
+    }
+
+    #[tokio::test]
+    async fn make_migration_updates_mod_rs() {
+        let dir = std::env::temp_dir().join(format!("rustique-cli-reg-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("mod.rs"), "fn all() { migrations![] }\n").unwrap();
+        let lines = execute_line(&format!(
+            "make:migration add_votes --path {}",
+            dir.display()
+        ))
+        .await
+        .unwrap();
+        assert!(lines[1].starts_with("Registered in:"), "{lines:?}");
+        let module = lines[0].rsplit('/').next().unwrap().trim_end_matches(".rs");
+        let mod_rs = fs::read_to_string(dir.join("mod.rs")).unwrap();
+        assert_eq!(
+            mod_rs,
+            format!("mod {module};\nfn all() {{ migrations![{module}] }}\n")
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
