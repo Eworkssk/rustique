@@ -68,6 +68,7 @@ let posts = Post::query().order_by(rustique::col!("posts.id")).get(&db).await?; 
 let page = User::query().cursor_paginate(&db, 50, None).await?;  // page.next_cursor for the next one
 let ann = User::first_or_create(&db, vec![(User::EMAIL, "a@x.io".into())], vec![]).await?;
 for post in user.posts.loaded()? { /* after with("posts") or user.load(&db, "posts") */ }
+let rows = db.select(rustique::sql!("SELECT id FROM users WHERE id > ?"), [10.into()]).await?; // raw SQL, checked with `schema-check`
 
 let tx = db.begin().await?;
 user.force_delete(&tx).await?;

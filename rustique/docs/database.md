@@ -227,6 +227,8 @@ done.rows_affected;
 
 Never `format!` request data into raw SQL; pass it as a `?` binding.
 
+With the `schema-check` feature, wrap a literal in `rustique::sql!("...")` to check its tables and `table.column` references against the schema snapshot at compile time: see the [compile-time schema check](migrations.md#compile-time-schema-check).
+
 ### Session state
 
 `SET`, `LOCK TABLES`, temporary tables and `GET_LOCK` change the connection they run on, not the `Db`. Two calls on `Db` can borrow different pooled connections, so run them inside a [transaction](#transactions), which keeps one connection until it ends:

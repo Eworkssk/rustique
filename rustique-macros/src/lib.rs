@@ -60,6 +60,26 @@ pub fn col(input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// `sql!("SELECT * FROM users WHERE users.id = ?")`: the string itself, a
+/// `&'static str` for `select`, `statement` and the other raw SQL methods.
+///
+/// With the `schema-check` feature and a schema snapshot, it is a compile
+/// error when a table after `FROM`, `JOIN`, `INSERT INTO`, `MERGE INTO` or a
+/// leading `UPDATE` is not in the snapshot, or when a `table.column`
+/// reference to such a table names a missing column. Anything ambiguous is
+/// skipped: see the schema check in `docs/migrations.md`.
+#[proc_macro]
+pub fn sql(input: TokenStream) -> TokenStream {
+    let sql = parse_macro_input!(input as LitStr);
+    #[cfg(feature = "schema-check")]
+    let expanded = schema_check::sql(&sql);
+    #[cfg(not(feature = "schema-check"))]
+    let expanded = Ok::<_, syn::Error>(quote!(#sql));
+    expanded
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
 /// Stores a type in a column: implements `rustique::FromValue` and
 /// `From<T> for rustique::Value`, so the type can be a model field and a binding.
 ///

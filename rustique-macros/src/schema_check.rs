@@ -133,6 +133,139 @@ pub(crate) fn check_reference(
     }
 }
 
+/// `sql!("SELECT ...")`: the literal, after [`check_sql`].
+pub(crate) fn sql(literal: &LitStr) -> syn::Result<TokenStream2> {
+    let Some((snapshot, rebuild)) = load()? else {
+        return Ok(quote!(#literal));
+    };
+    check_sql(&snapshot, &literal.value())
+        .map_err(|message| syn::Error::new_spanned(literal, message))?;
+    Ok(quote!({ #rebuild #literal }))
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum SqlToken<'a> {
+    /// A bare identifier or keyword.
+    Word(&'a str),
+    Punct(char),
+    /// A string, quoted identifier or number.
+    Other,
+}
+
+/// Splits SQL into words, punctuation and quoted or numeric tokens; comments
+/// (`--`, `#`, `/* */`) are dropped.
+fn sql_tokens(sql: &str) -> Vec<SqlToken<'_>> {
+    let mut tokens = Vec::new();
+    let mut rest = sql;
+    while let Some(c) = rest.chars().next() {
+        let skip = if c.is_whitespace() {
+            c.len_utf8()
+        } else if rest.starts_with("--") || c == '#' {
+            rest.find('\n').unwrap_or(rest.len())
+        } else if rest.starts_with("/*") {
+            rest.find("*/").map_or(rest.len(), |end| end + 2)
+        } else if matches!(c, '\'' | '"' | '`') {
+            tokens.push(SqlToken::Other);
+            rest[1..].find(c).map_or(rest.len(), |end| end + 2)
+        } else if c.is_ascii_alphanumeric() || c == '_' {
+            let end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '$' | '#')))
+                .unwrap_or(rest.len());
+            tokens.push(if c.is_ascii_digit() {
+                SqlToken::Other
+            } else {
+                SqlToken::Word(&rest[..end])
+            });
+            end
+        } else {
+            tokens.push(SqlToken::Punct(c));
+            c.len_utf8()
+        };
+        rest = &rest[skip..];
+    }
+    tokens
+}
+
+/// Errors for tables after `FROM`, `JOIN`, `INSERT INTO` / `MERGE INTO` or a
+/// leading `UPDATE` that are not in the snapshot, and for `table.column`
+/// references to those tables whose column is not.
+///
+/// shortcut: a tiny tokenizer, no parser. To never fail valid SQL it skips:
+/// SQL with `WITH` (CTE names) or a backslash (escapes differ per dialect);
+/// `FROM` inside parentheses that do not start with `SELECT` (`EXTRACT(x FROM y)`)
+/// and after `DISTINCT`; quoted and `schema.table` names; names followed by `(`
+/// except after `INTO`; `dual`, `lateral` and MySQL modifiers; `x.col` unless
+/// `x` is used as a table in the same SQL. Only the first table of `FROM a, b`
+/// is seen. Upgrade to a real SQL parser if false negatives start to matter.
+fn check_sql(snapshot: &Snapshot, sql: &str) -> Result<(), String> {
+    use SqlToken::{Punct, Word};
+    let tokens = sql_tokens(sql);
+    let is = |i: usize, keywords: &[&str]| {
+        i < tokens.len()
+            && matches!(tokens[i], Word(w) if keywords.iter().any(|k| w.eq_ignore_ascii_case(k)))
+    };
+    if sql.contains('\\') || (0..tokens.len()).any(|i| is(i, &["WITH"])) {
+        return Ok(());
+    }
+    let mut tables = Vec::new();
+    // Per open parenthesis: whether it starts a `SELECT`.
+    let mut selects = Vec::new();
+    for i in 0..tokens.len() {
+        match tokens[i] {
+            Punct('(') => selects.push(is(i + 1, &["SELECT"])),
+            Punct(')') => {
+                selects.pop();
+            }
+            _ => {}
+        }
+        if !selects.last().copied().unwrap_or(true) {
+            continue;
+        }
+        let before = |keywords| i > 0 && is(i - 1, keywords);
+        let into = is(i, &["INTO"]) && before(&["INSERT", "IGNORE", "REPLACE", "MERGE"]);
+        let table = (is(i, &["FROM"]) && !before(&["DISTINCT"]))
+            || is(i, &["JOIN"])
+            || (i == 0 && is(i, &["UPDATE"]))
+            || into;
+        if !table
+            || is(
+                i + 1,
+                &["DUAL", "LATERAL", "LOW_PRIORITY", "IGNORE", "ONLY"],
+            )
+        {
+            continue;
+        }
+        let (Some(Word(name)), next) = (tokens.get(i + 1), tokens.get(i + 2)) else {
+            continue;
+        };
+        if next == Some(&Punct('.')) || (next == Some(&Punct('(')) && !into) {
+            continue;
+        }
+        if !snapshot.tables.contains_key(&name.to_lowercase()) {
+            return Err(format!("table `{name}` is not in {FILE}"));
+        }
+        tables.push(name.to_lowercase());
+    }
+    for (i, window) in tokens.windows(3).enumerate() {
+        let [Word(table), Punct('.'), Word(column)] = *window else {
+            continue;
+        };
+        let after = tokens.get(i + 3);
+        if (i > 0 && matches!(tokens[i - 1], Punct('.' | ':' | '@')))
+            || matches!(after, Some(Punct('.' | '(')))
+            || !tables.contains(&table.to_lowercase())
+        {
+            continue;
+        }
+        if !snapshot.tables[&table.to_lowercase()].contains_key(&column.to_lowercase()) {
+            return Err(format!(
+                "table `{table}` has no column `{column}` in {FILE}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Query-builder methods whose first argument is a column.
 const COLUMN_METHODS: &[&str] = &[
     "where_",
@@ -756,6 +889,57 @@ mod tests {
         );
         let found: Vec<String> = found.iter().map(LitStr::value).collect();
         assert_eq!(found, ["users.a", "users.b", "users.c", "posts.d"]);
+    }
+
+    #[test]
+    fn checks_raw_sql() {
+        let snapshot = Snapshot::parse(
+            "users\tid\tnot null\tbigint\n\
+             users\temail\tnot null\tvarchar(255)\n\
+             posts\tid\tnot null\tbigint\n\
+             posts\tuser_id\tnot null\tbigint\n",
+        )
+        .unwrap();
+        let check = |sql: &str| check_sql(&snapshot, sql).err();
+        for ok in [
+            "SELECT u.id, users.email FROM users u JOIN posts ON posts.user_id = users.id",
+            "select * from USERS where Users.Email = ?",
+            "INSERT INTO users (id, email) VALUES (?, ?)",
+            "UPDATE users SET email = ? WHERE users.id = :id",
+            "DELETE FROM posts WHERE user_id IN (SELECT id FROM users)",
+            // Skipped: functions, strings, comments, CTEs, other schemas, dual, aliases.
+            "SELECT EXTRACT(YEAR FROM created) FROM users",
+            "SELECT 'FROM nope' FROM users -- JOIN nope\n /* FROM nope */",
+            "WITH x AS (SELECT 1) SELECT * FROM x",
+            "SELECT * FROM other.table_x JOIN `quoted` ON 1 = 1",
+            "SELECT 1 FROM dual",
+            "SELECT p.nope FROM users p",
+            "INSERT INTO users (id) VALUES (1) ON DUPLICATE KEY UPDATE nope = 1",
+            "SELECT x INTO v FROM users",
+            "SELECT * FROM users WHERE a IS DISTINCT FROM b",
+            "SELECT 'it\\'s FROM nope' FROM users",
+            "SELECT users.id FROM users FOR UPDATE",
+            // Unqualified columns are not checked.
+            "UPDATE posts SET title = ?",
+        ] {
+            assert_eq!(check(ok), None, "{ok}");
+        }
+        assert_eq!(
+            check("SELECT * FROM users JOIN comments ON 1 = 1").unwrap(),
+            "table `comments` is not in rustique-schema.txt"
+        );
+        assert_eq!(
+            check("SELECT * FROM (SELECT * FROM nope) x").unwrap(),
+            "table `nope` is not in rustique-schema.txt"
+        );
+        assert_eq!(
+            check("SELECT posts.title FROM posts").unwrap(),
+            "table `posts` has no column `title` in rustique-schema.txt"
+        );
+        assert_eq!(
+            check("INSERT INTO post (id) VALUES (1)").unwrap(),
+            "table `post` is not in rustique-schema.txt"
+        );
     }
 
     #[test]

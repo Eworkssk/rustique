@@ -264,7 +264,20 @@ Column strings for the query builder can go through `rustique::col!`, which expa
 let query = User::query().where_(rustique::col!("users.email"), "=", "a@x.io");
 ```
 
-`#[rustique::scopes]` blocks and relation `scope = ...` closures are checked as well, but only for `"table.column"` literals passed as the first argument of `where_*`, `order_by*`, `group_by`, `select` and `add_select` (or as an array to `select`), and only when the snapshot has that table. Lone column names are not checked there, since the closure may be for another model; neither are expressions, aliases or `*_raw` methods. Raw SQL is checked at runtime only.
+`#[rustique::scopes]` blocks and relation `scope = ...` closures are checked as well, but only for `"table.column"` literals passed as the first argument of `where_*`, `order_by*`, `group_by`, `select` and `add_select` (or as an array to `select`), and only when the snapshot has that table. Lone column names are not checked there, since the closure may be for another model; neither are expressions, aliases or `*_raw` methods.
+
+Raw SQL can go through `rustique::sql!`, which also expands to the string itself. With a snapshot, it fails to compile when a table after `FROM`, `JOIN`, `INSERT INTO`, `MERGE INTO` or a leading `UPDATE` is not in the snapshot, or when a `table.column` reference to one of those tables names a missing column.
+
+```rust
+# use rustique::prelude::*;
+# async fn run(db: &Db) -> rustique::Result<()> {
+let rows = db
+    .select(rustique::sql!("SELECT users.email FROM users WHERE users.id = ?"), [1.into()])
+    .await?;
+# Ok(()) }
+```
+
+`sql!` reads SQL with a tiny tokenizer, not a parser, so it skips whatever it cannot be sure of rather than fail valid SQL: SQL containing `WITH` or a backslash, quoted and `schema.table` names, `FROM` inside a function call (`EXTRACT(YEAR FROM d)`), `dual`, table functions, aliases (`u.id` with `FROM users u`), unqualified columns, and every table after the first of `FROM a, b`.
 
 To fail CI on a stale snapshot, migrate a database, run `schema:snapshot` and check that `git diff --exit-code rustique-schema.txt` passes.
 
