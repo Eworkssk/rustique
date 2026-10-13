@@ -91,7 +91,8 @@ pub(super) fn pool(url: &str, config: PoolConfig) -> Result<Pool> {
     }
     opts = OptsBuilder::from_opts(opts)
         .pool_opts(pool_opts)
-        .setup(config.session_setup) // also runs after each reset
+        // Also runs after each reset; `mysql_async` runs the list from the end.
+        .setup(config.session_setup.into_iter().rev().collect())
         .into();
 
     Ok(Pool {

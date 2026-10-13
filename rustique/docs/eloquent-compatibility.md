@@ -33,7 +33,7 @@ Checked against the code on 2026-10-11, after the parity pass that closed the ga
 | toArray / toJson | serde `Serialize` | Have |
 | casts | `#[derive(rustique::Cast)]` | Have |
 | custom timestamp columns | `created_at = "..."` etc. | Have |
-| `app.timezone` | `rustique::set_timezone`, `rustique::now` | Have; process-wide, no per-connection session time zone |
+| `app.timezone` | `rustique::set_timezone`, `rustique::now`, `DbBuilder::timezone` | Have; `set_timezone` is process-wide, `DbBuilder::timezone` sets the session time zone |
 | partial selects (`select('id', 'name')`) | missing columns take `Default` | Have |
 | touch, replicate, refresh, fresh | same names | Have |
 | UUID / ULID keys | `#[rustique::model(uuid)]` / `ulid` (UUID v7, lowercase ULID) | Have |
@@ -61,7 +61,7 @@ Checked against the code on 2026-10-11, after the parity pass that closed the ga
 |---|---|---|
 | nested transactions via savepoints | `tx.transaction(...)` | Have |
 | deadlock retry | `transaction_with_retries` | Have |
-| read / write connection split | `DbBuilder::read_url`, `Db::write` | Have; no `sticky` |
+| read / write connection split | `DbBuilder::read_url`, `Db::write`, `DbBuilder::sticky` | Have; `sticky` needs a `Db::sticky_scope` per request |
 | query logging | `tracing`, target `rustique::query` | Have |
 
 ## Schema and migrations

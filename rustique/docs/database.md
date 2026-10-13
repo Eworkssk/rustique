@@ -45,8 +45,35 @@ let fresh = QueryBuilder::table("users").get(&db.write()).await?;  // the primar
 ```
 
 - Plain `SELECT`s go to a replica. Writes, `FOR UPDATE` / `FOR SHARE` / `LOCK IN SHARE MODE` reads (line breaks included), other raw statements (`WITH ...`, `CALL ...`), transactions, schema checks, migrations and `create_or_first`'s lookup after a unique violation use the primary.
-- A replica may lag behind: read through `db.write()` (Laravel's `useWritePdo`) or inside a transaction when you must see a write made just before. There is no `sticky` option, since a `Db` is shared across requests.
+- A replica may lag behind: read through `db.write()` (Laravel's `useWritePdo`) or inside a transaction when you must see a write made just before.
 - Each replica gets its own pool with the builder's settings, and must use the same driver.
+
+### Sticky reads
+
+Laravel's `sticky` option: `.sticky(true)` (off by default) sends a request's reads to the primary once that request wrote. A `Db` is shared across requests, so the request is a scope you mark with `Db::sticky_scope`, for example around each handler in a middleware:
+
+```rust
+# use rustique::prelude::*;
+# async fn run() -> rustique::Result<()> {
+let db = Db::builder("mysql://app:pw@primary/app")
+    .read_url("mysql://app:pw@replica-1/app")
+    .sticky(true)
+    .connect()
+    .await?;
+
+Db::sticky_scope(async {
+    QueryBuilder::table("users").get(&db).await?;   // a replica
+    db.statement("UPDATE users SET active = 1 WHERE id = ?", [1.into()]).await?;
+    QueryBuilder::table("users").get(&db).await?;   // the primary, until the scope ends
+    Ok::<_, rustique::Error>(())
+})
+.await?;
+# Ok(()) }
+```
+
+- A write is any statement or transaction on the sticky `Db` (or its clones) inside the scope; a nested scope shares its outer one.
+- Outside a scope, `sticky` does nothing.
+- The scope lives in the current tokio task: work moved to `tokio::spawn` inside it does not share it (wrap that work in its own `Db::sticky_scope`). One write pins the reads of every sticky `Db` in the scope.
 
 ## Transactions
 
@@ -215,6 +242,27 @@ tx.commit().await?;
 ```
 
 Settings every connection needs belong in [`session_setup`](getting-started.md#pool-settings-and-tls) instead: it runs on each new connection and again after each MySQL reset, so the resets below never undo it.
+
+### Session time zone
+
+`.timezone(zone)` is a shortcut for the session time zone of every connection: `SET time_zone = '...'` on MySQL, `ALTER SESSION SET TIME_ZONE = '...'` on Oracle. It runs with `session_setup` (before its statements, so a `session_setup` statement setting the zone wins) on each new connection and after each reset or replaced session.
+
+```rust
+# use rustique::prelude::*;
+# async fn run() -> rustique::Result<()> {
+rustique::set_timezone(chrono::FixedOffset::east_opt(2 * 3600).unwrap()); // what the ORM writes
+let db = Db::builder("mysql://app:pw@localhost/app")
+    .timezone("+02:00")                                      // what the database's NOW() uses
+    .session_setup(["SET SESSION max_execution_time = 25000"]) // runs too
+    .connect()
+    .await?;
+# rustique::set_timezone(chrono::Utc);
+# Ok(()) }
+```
+
+- The session zone drives `NOW()` / `CURRENT_TIMESTAMP` (Oracle's, not `SYSTIMESTAMP`) and MySQL `TIMESTAMP` column conversion. The date-times the ORM itself writes and reads follow `rustique::set_timezone`; set both to the same zone so the two agree.
+- Named zones (`"Europe/Bratislava"`) follow daylight saving time. MySQL needs its time zone tables loaded for them (`mysql_tzinfo_to_sql`); fixed offsets (`"+02:00"`) always work.
+- A zone with a quote or backslash is an `Error::Config`; an unknown zone fails the first query.
 
 Session state never reaches later queries that borrow the same pooled connection:
 

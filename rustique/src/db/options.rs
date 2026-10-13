@@ -33,6 +33,8 @@ pub(super) struct PoolConfig {
     pub keep_sessions: bool,
     /// See [`DbBuilder::session_setup`].
     pub session_setup: Vec<String>,
+    /// See [`DbBuilder::timezone`].
+    pub timezone: Option<String>,
     #[cfg(feature = "mysql-rustls")]
     pub tls: Option<Tls>,
 }
@@ -56,6 +58,7 @@ pub(super) struct PoolConfig {
 pub struct DbBuilder {
     url: String,
     read_urls: Vec<String>,
+    sticky: bool,
     config: PoolConfig,
 }
 
@@ -64,6 +67,7 @@ impl DbBuilder {
         Self {
             url: url.to_owned(),
             read_urls: Vec::new(),
+            sticky: false,
             config: PoolConfig::default(),
         }
     }
@@ -133,6 +137,20 @@ impl DbBuilder {
         self
     }
 
+    /// Session time zone of every connection, such as `"Europe/Bratislava"`
+    /// or `"+02:00"`: runs `SET time_zone = '...'` (MySQL) or
+    /// `ALTER SESSION SET TIME_ZONE = '...'` (Oracle) before the
+    /// [`session_setup`](Self::session_setup) statements, and again whenever
+    /// those run. It sets what `NOW()` / `CURRENT_TIMESTAMP` and MySQL
+    /// `TIMESTAMP` columns use; the zone of the date-times the ORM writes is
+    /// [`set_timezone`](crate::set_timezone), so set both to the same zone.
+    /// MySQL needs its time zone tables loaded for named zones. A zone with
+    /// a quote or backslash fails [`connect`](Self::connect) with [`Error::Config`].
+    pub fn timezone(mut self, zone: &str) -> Self {
+        self.config.timezone = Some(zone.to_owned());
+        self
+    }
+
     /// Connects to MySQL over TLS, verifying the server against `tls`.
     /// Oracle takes TLS in the URL instead (`tcps://`, see [`Db::connect`]),
     /// so this fails there with [`Error::Config`].
@@ -149,6 +167,15 @@ impl DbBuilder {
     /// settings, and must use the same driver as the main URL.
     pub fn read_url(mut self, url: &str) -> Self {
         self.read_urls.push(url.to_owned());
+        self
+    }
+
+    /// Laravel's `sticky` option, default off: inside a
+    /// [`Db::sticky_scope`], once this pool writes (a statement or a
+    /// transaction), its plain reads go to the primary until the scope ends,
+    /// so a request reads back what it just wrote. No effect without replicas.
+    pub fn sticky(mut self, sticky: bool) -> Self {
+        self.sticky = sticky;
         self
     }
 
@@ -203,6 +230,7 @@ impl DbBuilder {
             read.push(replica.pool);
         }
         db.read = read.into();
+        db.sticky = self.sticky;
         Ok(db)
     }
 }
