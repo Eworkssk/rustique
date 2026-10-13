@@ -806,20 +806,7 @@ impl RelationField {
         let through = match (self.kind, &self.through) {
             (kind, _) if kind.has_pivot() => {
                 let related_snake = snake(&type_name(related));
-                let table = match (&self.table, kind) {
-                    (Some(table), _) => quote!(#table),
-                    (None, RelationKind::BelongsToMany) => {
-                        let mut names = [parent_snake, related_snake.clone()];
-                        names.sort();
-                        let table = names.join("_");
-                        quote!(#table)
-                    }
-                    // Eloquent's plural of the morph name: `taggable` → `taggables`.
-                    (None, _) => {
-                        let table = format!("{}s", self.morph_name());
-                        quote!(#table)
-                    }
-                };
+                let table = self.pivot_table(&parent_snake);
                 let related_pivot = match kind {
                     RelationKind::MorphedByMany => id(self.morph_name()),
                     _ => id(related_snake),
@@ -925,6 +912,20 @@ impl RelationField {
         })
     }
 
+    /// The pivot table of a `has_pivot` relation: `table`, or Eloquent's default.
+    fn pivot_table(&self, parent_snake: &str) -> String {
+        match (&self.table, self.kind) {
+            (Some(table), _) => table.value(),
+            (None, RelationKind::BelongsToMany) => {
+                let mut names = [parent_snake.to_owned(), snake(&type_name(&self.related))];
+                names.sort();
+                names.join("_")
+            }
+            // Eloquent's plural of the morph name: `taggable` → `taggables`.
+            (None, _) => format!("{}s", self.morph_name()),
+        }
+    }
+
     /// `name` of a morph relation, checked at parse time.
     fn morph_name(&self) -> String {
         self.keys["name"][0].value()
@@ -1004,7 +1005,13 @@ fn expand(options: Options, mut item: ItemStruct) -> syn::Result<TokenStream2> {
 
     let fill = expand_fill(&item, &fields.columns, &managed, &deserialize)?;
     #[cfg(feature = "schema-check")]
-    let schema_check = schema_check::check(&table, &fields.columns)?;
+    let schema_check = schema_check::check(
+        &table,
+        &item.ident,
+        &fields.columns,
+        &fields.relations,
+        &fields.morphs,
+    )?;
     #[cfg(not(feature = "schema-check"))]
     let schema_check = TokenStream2::new();
     let ident = &item.ident;

@@ -249,7 +249,8 @@ Each model gets a compile error at the field for:
 
 - a table or column that is not in the snapshot;
 - a nullable column whose field is not an `Option` (except `String` on Oracle, which reads `NULL` as `""`). For a nullable column that never holds `NULL`, as in many legacy schemas, mark the field `#[rustique(not_null)]`;
-- a column type the field type cannot read, such as a `varchar` into `i64` or a `decimal(10,2)` into `i64`.
+- a column type the field type cannot read, such as a `varchar` into `i64` or a `decimal(10,2)` into `i64`;
+- a key that a relation attribute names (`foreign_key`, `local_key`, `owner_key`, `parent_key`, `related_key`, the pivot keys, `pivot` columns, `pivot_timestamps`, the `through` keys) and the `{name}_type` / `{name}_id` columns of morph relations and `morph_to` fields, when the snapshot has the table they belong in. The macro knows the related model only as a type, so it looks for the related table under the snake_case plural of the type name (`BlogPost` is `blog_posts`) and skips the key when the snapshot has no such table. Keys left to their defaults are not checked, except the morph columns.
 
 The check is skipped without the feature or without the file, so a fresh clone builds as before. Field types the check does not know, such as `#[derive(rustique::Cast)]` types and `rustique::Value`, are only checked for existence. Tables named `schema.table` are not checked. The check only covers model fields: column names in query-builder calls and raw SQL are still checked at runtime.
 

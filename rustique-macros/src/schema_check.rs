@@ -4,21 +4,28 @@
 //!
 //! Without the file nothing is checked. Types the check does not know,
 //! such as `#[derive(rustique::Cast)]` types, are checked for existence only.
+//! Relation keys are checked when their table is in the snapshot.
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
-use syn::{GenericArgument, LitStr, PathArguments, Type};
+use syn::{GenericArgument, Ident, LitStr, PathArguments, Type};
 
-use crate::Column;
+use crate::{Column, MorphToField, RelationField, RelationKind, snake, type_name};
 
 const FILE: &str = "rustique-schema.txt";
 
-/// Errors for every field that does not match the snapshot, or tokens that
-/// make cargo rebuild the model when the snapshot changes.
-pub(crate) fn check(table: &LitStr, columns: &[Column]) -> syn::Result<TokenStream2> {
+/// Errors for every field or relation key that does not match the snapshot,
+/// or tokens that make cargo rebuild the model when the snapshot changes.
+pub(crate) fn check(
+    table: &LitStr,
+    model: &Ident,
+    columns: &[Column],
+    relations: &[RelationField],
+    morphs: &[MorphToField],
+) -> syn::Result<TokenStream2> {
     let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") else {
         return Ok(TokenStream2::new());
     };
@@ -29,7 +36,14 @@ pub(crate) fn check(table: &LitStr, columns: &[Column]) -> syn::Result<TokenStre
     let snapshot = Snapshot::parse(&text).map_err(|problem| {
         syn::Error::new(Span::call_site(), format!("{}: {problem}", path.display()))
     })?;
-    check_columns(&snapshot, table, columns)?;
+    let keys = relation_keys(&table.value(), model, relations, morphs);
+    let results = [
+        check_columns(&snapshot, table, columns),
+        check_keys(&snapshot, &keys),
+    ];
+    if let Some(error) = combine(results.into_iter().filter_map(Result::err)) {
+        return Err(error);
+    }
     let path = path.display().to_string();
     Ok(quote!(
         const _: &[u8] = ::core::include_bytes!(#path);
@@ -148,6 +162,97 @@ pub(crate) fn check_columns(
         }
     }
     errors.map_or(Ok(()), Err)
+}
+
+fn combine(errors: impl IntoIterator<Item = syn::Error>) -> Option<syn::Error> {
+    errors.into_iter().reduce(|mut all, error| {
+        all.combine(error);
+        all
+    })
+}
+
+/// The columns that relation attributes name, each with the table it belongs in.
+///
+/// shortcut: the related (and `through`) model's table is known only as a Rust
+/// type, so it is guessed as the snake_case plural of the type name (`BlogPost`
+/// → `blog_posts`) and skipped when the snapshot has no such table; a model with
+/// another table while a table of the guessed name exists is checked against the
+/// wrong one. Upgrade when the macro can see the related model's `TABLE`.
+pub(crate) fn relation_keys(
+    table: &str,
+    model: &Ident,
+    relations: &[RelationField],
+    morphs: &[MorphToField],
+) -> Vec<(String, LitStr)> {
+    let guess = |path: &syn::Path| format!("{}s", snake(&type_name(path)));
+    let mut keys = Vec::new();
+    for relation in relations {
+        let related = guess(&relation.related);
+        let pivot = relation
+            .kind
+            .has_pivot()
+            .then(|| relation.pivot_table(&snake(&model.to_string())));
+        let through = relation.through.as_ref().map(guess);
+        for (option, columns) in &relation.keys {
+            let owner = match (option.as_str(), relation.kind) {
+                ("local_key" | "parent_key", _) | ("foreign_key", RelationKind::BelongsTo) => {
+                    Some(table)
+                }
+                ("foreign_key" | "owner_key" | "related_key" | "second_key", _) => {
+                    Some(related.as_str())
+                }
+                ("foreign_pivot_key" | "related_pivot_key" | "pivot", _) => pivot.as_deref(),
+                ("first_key" | "second_local_key", _) => through.as_deref(),
+                _ => None,
+            };
+            if let Some(owner) = owner {
+                keys.extend(columns.iter().map(|c| (owner.to_owned(), c.clone())));
+            }
+        }
+        if let (Some(pivot), Some(timestamps)) = (&pivot, &relation.pivot_timestamps) {
+            keys.extend(timestamps.iter().map(|c| (pivot.clone(), c.clone())));
+        }
+        if relation.kind.is_morph() {
+            let name = &relation.keys["name"][0];
+            let column = |suffix| LitStr::new(&format!("{}{suffix}", name.value()), name.span());
+            // `{name}_id` is the default of this key, checked above when it is given.
+            let (owner, id_key) = match relation.kind {
+                RelationKind::MorphOne | RelationKind::MorphMany => (Some(&related), ""),
+                RelationKind::MorphToMany => (pivot.as_ref(), "foreign_pivot_key"),
+                _ => (pivot.as_ref(), "related_pivot_key"),
+            };
+            if let Some(owner) = owner {
+                keys.push((owner.clone(), column("_type")));
+                if !relation.keys.contains_key(id_key) {
+                    keys.push((owner.clone(), column("_id")));
+                }
+            }
+        }
+    }
+    for morph in morphs {
+        for suffix in ["_type", "_id"] {
+            let column = LitStr::new(&format!("{}{suffix}", morph.columns), morph.ident.span());
+            keys.push((table.to_owned(), column));
+        }
+    }
+    keys
+}
+
+/// Errors for `(table, column)` pairs whose table is in the snapshot without the column.
+pub(crate) fn check_keys(snapshot: &Snapshot, keys: &[(String, LitStr)]) -> syn::Result<()> {
+    let errors = keys.iter().filter_map(|(table, column)| {
+        let columns = snapshot.tables.get(&table.to_lowercase())?;
+        (!columns.contains_key(&column.value().to_lowercase())).then(|| {
+            syn::Error::new_spanned(
+                column,
+                format!(
+                    "table `{table}` has no column `{}` in {FILE}",
+                    column.value()
+                ),
+            )
+        })
+    });
+    combine(errors).map_or(Ok(()), Err)
 }
 
 /// `T` of `Name<T>`.
@@ -385,6 +490,65 @@ mod tests {
         assert_eq!(errors(oracle, "users", &columns), Vec::<String>::new());
         let columns = [column("price", parse_quote!(i64))];
         assert_eq!(errors(oracle, "users", &columns).len(), 1);
+    }
+
+    #[test]
+    fn checks_relation_keys() {
+        let snapshot = Snapshot::parse(
+            "users\tid\tnot null\tbigint\n\
+             users\tuuid\tnot null\tvarchar(36)\n\
+             users\tcommentable_type\tnull\tvarchar(50)\n\
+             users\tcommentable_id\tnull\tbigint\n\
+             posts\tuser_id\tnot null\tbigint\n\
+             role_user\tuser_id\tnot null\tbigint\n\
+             role_user\trole_id\tnot null\tbigint\n\
+             taggables\ttaggable_type\tnot null\tvarchar(50)\n",
+        )
+        .unwrap();
+        let mut item: syn::ItemStruct = parse_quote! {
+            struct User {
+                #[rustique(has_many(Post, foreign_key = "user_id", local_key = "uuid"))]
+                posts: Rel<Vec<Post>>,
+                #[rustique(has_many(Post, foreign_key = "author_id", local_key = "nope"))]
+                bad_posts: Rel<Vec<Post>>,
+                // No `comments` table in the snapshot: skipped.
+                #[rustique(has_many(Comment, foreign_key = "anything"))]
+                comments: Rel<Vec<Comment>>,
+                #[rustique(belongs_to_many(Role, foreign_pivot_key = "user_id", related_pivot_key = "rol_id", pivot = ["level"]))]
+                roles: Rel<Vec<Role>>,
+                // `taggables` has `taggable_type` but no `taggable_id`.
+                #[rustique(morph_to_many(Tag, name = "taggable"))]
+                tags: Rel<Vec<Tag>>,
+                #[rustique(morph_to)]
+                commentable: Rel<Option<Commentable>>,
+                #[rustique(morph_to)]
+                owner: Rel<Option<Owner>>,
+            }
+        };
+        let syn::Fields::Named(named) = &mut item.fields else {
+            unreachable!()
+        };
+        let fields = crate::ModelFields::parse(&mut named.named, None).unwrap();
+        let keys = relation_keys("users", &item.ident, &fields.relations, &fields.morphs);
+        let mut errors: Vec<String> = check_keys(&snapshot, &keys)
+            .err()
+            .into_iter()
+            .flatten()
+            .map(|e| e.to_string())
+            .collect();
+        errors.sort();
+        assert_eq!(
+            errors,
+            [
+                "table `posts` has no column `author_id` in rustique-schema.txt",
+                "table `role_user` has no column `level` in rustique-schema.txt",
+                "table `role_user` has no column `rol_id` in rustique-schema.txt",
+                "table `taggables` has no column `taggable_id` in rustique-schema.txt",
+                "table `users` has no column `nope` in rustique-schema.txt",
+                "table `users` has no column `owner_id` in rustique-schema.txt",
+                "table `users` has no column `owner_type` in rustique-schema.txt",
+            ]
+        );
     }
 
     #[test]
