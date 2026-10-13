@@ -1,43 +1,382 @@
 //! The `schema-check` feature: compares a model's fields with the schema
 //! snapshot that the CLI's `schema:snapshot` writes to `rustique-schema.txt`
-//! next to the crate's `Cargo.toml` (format in `rustique/src/schema.rs`).
+//! next to the crate's `Cargo.toml` (format in `rustique/src/schema.rs`), or
+//! to `rustique-schema.<name>.txt` with `--name`, read for `schema = "<name>"`.
 //!
 //! Without the file nothing is checked. Types the check does not know,
 //! such as `#[derive(rustique::Cast)]` types, are checked for existence only.
+//! Relation keys are checked when their table is in the snapshot.
+//!
+//! `col!`, `#[rustique::scopes]` and relation `scope`s check column strings
+//! (`column_literals`, `check_reference`).
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::quote;
-use syn::{GenericArgument, LitStr, PathArguments, Type};
+use proc_macro2::{Delimiter, Span, TokenStream as TokenStream2, TokenTree};
+use quote::{ToTokens, quote};
+use syn::{GenericArgument, Ident, LitStr, PathArguments, Type};
 
-use crate::Column;
+use crate::{Column, MorphToField, RelationField, RelationKind, snake, type_name};
 
 const FILE: &str = "rustique-schema.txt";
 
-/// Errors for every field that does not match the snapshot, or tokens that
-/// make cargo rebuild the model when the snapshot changes.
-pub(crate) fn check(table: &LitStr, columns: &[Column]) -> syn::Result<TokenStream2> {
+/// The snapshot next to the crate's `Cargo.toml`: `rustique-schema.txt`, or
+/// `rustique-schema.<name>.txt` for a `name`, with tokens that make cargo
+/// rebuild the caller when the file changes; `None` without the file.
+pub(crate) fn load(name: Option<&str>) -> syn::Result<Option<(Snapshot, TokenStream2)>> {
+    let file = match name {
+        Some(name)
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')) =>
+        {
+            return Err(syn::Error::new(
+                Span::call_site(),
+                format!("schema snapshot name `{name}` may only hold letters, digits, `_` and `-`"),
+            ));
+        }
+        Some(name) => format!("rustique-schema.{name}.txt"),
+        None => FILE.to_owned(),
+    };
     let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") else {
-        return Ok(TokenStream2::new());
+        return Ok(None);
     };
-    let path = Path::new(&dir).join(FILE);
+    let path = Path::new(&dir).join(&file);
     let Ok(text) = std::fs::read_to_string(&path) else {
-        return Ok(TokenStream2::new());
+        return Ok(None);
     };
-    let snapshot = Snapshot::parse(&text).map_err(|problem| {
+    let mut snapshot = Snapshot::parse(&text).map_err(|problem| {
         syn::Error::new(Span::call_site(), format!("{}: {problem}", path.display()))
     })?;
-    check_columns(&snapshot, table, columns)?;
+    snapshot.file = file;
     let path = path.display().to_string();
-    Ok(quote!(
-        const _: &[u8] = ::core::include_bytes!(#path);
-    ))
+    Ok(Some((
+        snapshot,
+        quote!(
+            const _: &[u8] = ::core::include_bytes!(#path);
+        ),
+    )))
+}
+
+/// Errors for every field, relation key or column string of a relation
+/// `scope` that does not match the snapshot, or the rebuild tokens of [`load`].
+///
+/// The snapshot is the one named by `schema`, else by the schema of a
+/// `schema.table` name, else the default one.
+pub(crate) fn check(
+    schema: Option<&LitStr>,
+    table: &LitStr,
+    model: &Ident,
+    columns: &[Column],
+    relations: &[RelationField],
+    morphs: &[MorphToField],
+) -> syn::Result<TokenStream2> {
+    let qualified = table.value();
+    let (prefix, name) = match qualified.rsplit_once('.') {
+        Some((prefix, name)) => (Some(prefix), name),
+        None => (None, qualified.as_str()),
+    };
+    let schema = schema.map(LitStr::value);
+    let Some((snapshot, rebuild)) = load(schema.as_deref().or(prefix))? else {
+        return Ok(TokenStream2::new());
+    };
+    let table = &LitStr::new(name, table.span());
+    let keys = relation_keys(name, model, relations, morphs);
+    let mut literals = Vec::new();
+    for scope in relations.iter().filter_map(|r| r.scope.as_ref()) {
+        column_literals(scope.to_token_stream(), &mut literals);
+    }
+    let errors = [
+        check_columns(&snapshot, table, columns),
+        check_keys(&snapshot, &keys),
+    ]
+    .into_iter()
+    .filter_map(Result::err)
+    .chain(
+        literals
+            .iter()
+            .filter_map(|l| check_reference(&snapshot, l, false).err()),
+    );
+    combine(errors).map_or(Ok(rebuild), Err)
+}
+
+/// `col!("table.column")`: the literal, after [`check_reference`] with `strict`.
+pub(crate) fn col(schema: Option<&str>, literal: &LitStr) -> syn::Result<TokenStream2> {
+    let Some((snapshot, rebuild)) = load(schema)? else {
+        return Ok(quote!(#literal));
+    };
+    check_reference(&snapshot, literal, true)?;
+    Ok(quote!({ #rebuild #literal }))
+}
+
+/// Errors for the `table.column` strings that `tokens` passes to query-builder
+/// methods ([`column_literals`]), or the rebuild tokens of [`load`].
+pub(crate) fn check_tokens(
+    schema: Option<&str>,
+    tokens: TokenStream2,
+) -> syn::Result<TokenStream2> {
+    let Some((snapshot, rebuild)) = load(schema)? else {
+        return Ok(TokenStream2::new());
+    };
+    let mut literals = Vec::new();
+    column_literals(tokens, &mut literals);
+    let errors = literals
+        .iter()
+        .filter_map(|l| check_reference(&snapshot, l, false).err());
+    combine(errors).map_or(Ok(rebuild), Err)
+}
+
+/// `column` (in any table), `table.column` or `table.*`: an error when the
+/// snapshot has no such column. With `strict`, a table missing from the
+/// snapshot or a lone column in no table is an error; otherwise it is skipped,
+/// as are strings of any other shape (`schema.table.column`, `count(*)`, `id as key`).
+pub(crate) fn check_reference(
+    snapshot: &Snapshot,
+    literal: &LitStr,
+    strict: bool,
+) -> syn::Result<()> {
+    let (value, file) = (literal.value(), &snapshot.file);
+    let plain = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let fail = |message: String| Err(syn::Error::new_spanned(literal, message));
+    match value.split_once('.') {
+        Some((table, column)) if plain(table) && (plain(column) || column == "*") => {
+            match snapshot.tables.get(&table.to_lowercase()) {
+                None if strict => fail(format!("table `{table}` is not in {file}")),
+                Some(columns) if column != "*" && !columns.contains_key(&column.to_lowercase()) => {
+                    fail(format!(
+                        "table `{table}` has no column `{column}` in {file}"
+                    ))
+                }
+                _ => Ok(()),
+            }
+        }
+        None if strict
+            && plain(&value)
+            && !snapshot
+                .tables
+                .values()
+                .any(|t| t.contains_key(&value.to_lowercase())) =>
+        {
+            fail(format!("no table has a column `{value}` in {file}"))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// `sql!("SELECT ...")`: the literal, after [`check_sql`].
+pub(crate) fn sql(schema: Option<&str>, literal: &LitStr) -> syn::Result<TokenStream2> {
+    let Some((snapshot, rebuild)) = load(schema)? else {
+        return Ok(quote!(#literal));
+    };
+    check_sql(&snapshot, &literal.value())
+        .map_err(|message| syn::Error::new_spanned(literal, message))?;
+    Ok(quote!({ #rebuild #literal }))
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum SqlToken<'a> {
+    /// A bare identifier or keyword.
+    Word(&'a str),
+    Punct(char),
+    /// A string, quoted identifier or number.
+    Other,
+}
+
+/// Splits SQL into words, punctuation and quoted or numeric tokens; comments
+/// (`--`, `#`, `/* */`) are dropped.
+fn sql_tokens(sql: &str) -> Vec<SqlToken<'_>> {
+    let mut tokens = Vec::new();
+    let mut rest = sql;
+    while let Some(c) = rest.chars().next() {
+        let skip = if c.is_whitespace() {
+            c.len_utf8()
+        } else if rest.starts_with("--") || c == '#' {
+            rest.find('\n').unwrap_or(rest.len())
+        } else if rest.starts_with("/*") {
+            rest.find("*/").map_or(rest.len(), |end| end + 2)
+        } else if matches!(c, '\'' | '"' | '`') {
+            tokens.push(SqlToken::Other);
+            rest[1..].find(c).map_or(rest.len(), |end| end + 2)
+        } else if c.is_ascii_alphanumeric() || c == '_' {
+            let end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '$' | '#')))
+                .unwrap_or(rest.len());
+            tokens.push(if c.is_ascii_digit() {
+                SqlToken::Other
+            } else {
+                SqlToken::Word(&rest[..end])
+            });
+            end
+        } else {
+            tokens.push(SqlToken::Punct(c));
+            c.len_utf8()
+        };
+        rest = &rest[skip..];
+    }
+    tokens
+}
+
+/// Errors for tables after `FROM`, `JOIN`, `INSERT INTO` / `MERGE INTO` or a
+/// leading `UPDATE` that are not in the snapshot, and for `table.column`
+/// references to those tables whose column is not.
+///
+/// shortcut: a tiny tokenizer, no parser. To never fail valid SQL it skips:
+/// SQL with `WITH` (CTE names) or a backslash (escapes differ per dialect);
+/// `FROM` inside parentheses that do not start with `SELECT` (`EXTRACT(x FROM y)`)
+/// and after `DISTINCT`; quoted and `schema.table` names; names followed by `(`
+/// except after `INTO`; `dual`, `lateral` and MySQL modifiers; `x.col` unless
+/// `x` is used as a table in the same SQL. Only the first table of `FROM a, b`
+/// is seen. Upgrade to a real SQL parser if false negatives start to matter.
+fn check_sql(snapshot: &Snapshot, sql: &str) -> Result<(), String> {
+    use SqlToken::{Punct, Word};
+    let file = &snapshot.file;
+    let tokens = sql_tokens(sql);
+    let is = |i: usize, keywords: &[&str]| {
+        i < tokens.len()
+            && matches!(tokens[i], Word(w) if keywords.iter().any(|k| w.eq_ignore_ascii_case(k)))
+    };
+    if sql.contains('\\') || (0..tokens.len()).any(|i| is(i, &["WITH"])) {
+        return Ok(());
+    }
+    let mut tables = Vec::new();
+    // Per open parenthesis: whether it starts a `SELECT`.
+    let mut selects = Vec::new();
+    for i in 0..tokens.len() {
+        match tokens[i] {
+            Punct('(') => selects.push(is(i + 1, &["SELECT"])),
+            Punct(')') => {
+                selects.pop();
+            }
+            _ => {}
+        }
+        if !selects.last().copied().unwrap_or(true) {
+            continue;
+        }
+        let before = |keywords| i > 0 && is(i - 1, keywords);
+        let into = is(i, &["INTO"]) && before(&["INSERT", "IGNORE", "REPLACE", "MERGE"]);
+        let table = (is(i, &["FROM"]) && !before(&["DISTINCT"]))
+            || is(i, &["JOIN"])
+            || (i == 0 && is(i, &["UPDATE"]))
+            || into;
+        if !table
+            || is(
+                i + 1,
+                &["DUAL", "LATERAL", "LOW_PRIORITY", "IGNORE", "ONLY"],
+            )
+        {
+            continue;
+        }
+        let (Some(Word(name)), next) = (tokens.get(i + 1), tokens.get(i + 2)) else {
+            continue;
+        };
+        if next == Some(&Punct('.')) || (next == Some(&Punct('(')) && !into) {
+            continue;
+        }
+        if !snapshot.tables.contains_key(&name.to_lowercase()) {
+            return Err(format!("table `{name}` is not in {file}"));
+        }
+        tables.push(name.to_lowercase());
+    }
+    for (i, window) in tokens.windows(3).enumerate() {
+        let [Word(table), Punct('.'), Word(column)] = *window else {
+            continue;
+        };
+        let after = tokens.get(i + 3);
+        if (i > 0 && matches!(tokens[i - 1], Punct('.' | ':' | '@')))
+            || matches!(after, Some(Punct('.' | '(')))
+            || !tables.contains(&table.to_lowercase())
+        {
+            continue;
+        }
+        if !snapshot.tables[&table.to_lowercase()].contains_key(&column.to_lowercase()) {
+            return Err(format!(
+                "table `{table}` has no column `{column}` in {file}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Query-builder methods whose first argument is a column.
+const COLUMN_METHODS: &[&str] = &[
+    "where_",
+    "or_where",
+    "where_in",
+    "or_where_in",
+    "where_not_in",
+    "or_where_not_in",
+    "where_null",
+    "or_where_null",
+    "where_not_null",
+    "or_where_not_null",
+    "where_between",
+    "where_not_between",
+    "where_date",
+    "where_column",
+    "or_where_column",
+    "order_by",
+    "order_by_desc",
+    "group_by",
+    "select",
+    "add_select",
+];
+
+/// The string literals, or arrays of them, that `tokens` passes as the first
+/// argument of a [`COLUMN_METHODS`] call: `.where_("users.active", ...)`,
+/// `.select(["users.id"])`.
+///
+/// shortcut: matches method names on tokens, without types, so a non-`Query`
+/// method of the same name is scanned too; harmless while only `table.column`
+/// strings naming a snapshot table are checked. Upgrade if lone columns should
+/// be checked against the model's table.
+pub(crate) fn column_literals(tokens: TokenStream2, found: &mut Vec<LitStr>) {
+    let tokens: Vec<TokenTree> = tokens.into_iter().collect();
+    for (i, token) in tokens.iter().enumerate() {
+        if let TokenTree::Group(group) = token {
+            column_literals(group.stream(), found);
+        }
+        let Some(
+            [
+                TokenTree::Punct(dot),
+                TokenTree::Ident(method),
+                TokenTree::Group(args),
+            ],
+        ) = tokens.get(i..i + 3)
+        else {
+            continue;
+        };
+        if dot.as_char() != '.'
+            || args.delimiter() != Delimiter::Parenthesis
+            || !COLUMN_METHODS.contains(&method.to_string().as_str())
+        {
+            continue;
+        }
+        let first: Vec<TokenTree> = args
+            .stream()
+            .into_iter()
+            .take_while(|t| !matches!(t, TokenTree::Punct(p) if p.as_char() == ','))
+            .collect();
+        let literals = match &first[..] {
+            [TokenTree::Group(array)] if array.delimiter() == Delimiter::Bracket => {
+                array.stream().into_iter().collect()
+            }
+            [TokenTree::Literal(_)] => first,
+            _ => continue,
+        };
+        found.extend(
+            literals
+                .into_iter()
+                .filter_map(|t| syn::parse2::<LitStr>(t.into()).ok()),
+        );
+    }
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct Snapshot {
+    /// File name, for messages.
+    file: String,
     oracle: bool,
     /// Lower-case table name to its lower-case column names.
     tables: HashMap<String, HashMap<String, SnapshotColumn>>,
@@ -51,7 +390,10 @@ struct SnapshotColumn {
 
 impl Snapshot {
     pub(crate) fn parse(text: &str) -> Result<Self, String> {
-        let mut snapshot = Self::default();
+        let mut snapshot = Self {
+            file: FILE.to_owned(),
+            ..Self::default()
+        };
         for (number, line) in text.lines().enumerate() {
             if line.is_empty() || line.starts_with('#') {
                 continue;
@@ -92,15 +434,11 @@ pub(crate) fn check_columns(
     table: &LitStr,
     columns: &[Column],
 ) -> syn::Result<()> {
-    let name = table.value();
-    // shortcut: `schema.table` names a schema the snapshot does not cover; skipped.
-    if name.contains('.') {
-        return Ok(());
-    }
+    let (name, file) = (table.value(), &snapshot.file);
     let Some(snapshot_columns) = snapshot.tables.get(&name.to_lowercase()) else {
         return Err(syn::Error::new_spanned(
             table,
-            format!("table `{name}` is not in {FILE}; migrate, then run `schema:snapshot` again"),
+            format!("table `{name}` is not in {file}; migrate, then run `schema:snapshot` again"),
         ));
     };
     let mut errors: Option<syn::Error> = None;
@@ -112,7 +450,7 @@ pub(crate) fn check_columns(
         let Some(found) = snapshot_columns.get(&column.name.to_lowercase()) else {
             fail(syn::Error::new_spanned(
                 &column.ident,
-                format!("table `{name}` has no column `{}` in {FILE}", column.name),
+                format!("table `{name}` has no column `{}` in {file}", column.name),
             ));
             continue;
         };
@@ -148,6 +486,98 @@ pub(crate) fn check_columns(
         }
     }
     errors.map_or(Ok(()), Err)
+}
+
+fn combine(errors: impl IntoIterator<Item = syn::Error>) -> Option<syn::Error> {
+    errors.into_iter().reduce(|mut all, error| {
+        all.combine(error);
+        all
+    })
+}
+
+/// The columns that relation attributes name, each with the table it belongs in.
+///
+/// shortcut: the related (and `through`) model's table is known only as a Rust
+/// type, so it is guessed as the snake_case plural of the type name (`BlogPost`
+/// → `blog_posts`) and skipped when the snapshot has no such table; a model with
+/// another table while a table of the guessed name exists is checked against the
+/// wrong one. Upgrade when the macro can see the related model's `TABLE`.
+pub(crate) fn relation_keys(
+    table: &str,
+    model: &Ident,
+    relations: &[RelationField],
+    morphs: &[MorphToField],
+) -> Vec<(String, LitStr)> {
+    let guess = |path: &syn::Path| format!("{}s", snake(&type_name(path)));
+    let mut keys = Vec::new();
+    for relation in relations {
+        let related = guess(&relation.related);
+        let pivot = relation
+            .kind
+            .has_pivot()
+            .then(|| relation.pivot_table(&snake(&model.to_string())));
+        let through = relation.through.as_ref().map(guess);
+        for (option, columns) in &relation.keys {
+            let owner = match (option.as_str(), relation.kind) {
+                ("local_key" | "parent_key", _) | ("foreign_key", RelationKind::BelongsTo) => {
+                    Some(table)
+                }
+                ("foreign_key" | "owner_key" | "related_key" | "second_key", _) => {
+                    Some(related.as_str())
+                }
+                ("foreign_pivot_key" | "related_pivot_key" | "pivot", _) => pivot.as_deref(),
+                ("first_key" | "second_local_key", _) => through.as_deref(),
+                _ => None,
+            };
+            if let Some(owner) = owner {
+                keys.extend(columns.iter().map(|c| (owner.to_owned(), c.clone())));
+            }
+        }
+        if let (Some(pivot), Some(timestamps)) = (&pivot, &relation.pivot_timestamps) {
+            keys.extend(timestamps.iter().map(|c| (pivot.clone(), c.clone())));
+        }
+        if relation.kind.is_morph() {
+            let name = &relation.keys["name"][0];
+            let column = |suffix| LitStr::new(&format!("{}{suffix}", name.value()), name.span());
+            // `{name}_id` is the default of this key, checked above when it is given.
+            let (owner, id_key) = match relation.kind {
+                RelationKind::MorphOne | RelationKind::MorphMany => (Some(&related), ""),
+                RelationKind::MorphToMany => (pivot.as_ref(), "foreign_pivot_key"),
+                _ => (pivot.as_ref(), "related_pivot_key"),
+            };
+            if let Some(owner) = owner {
+                keys.push((owner.clone(), column("_type")));
+                if !relation.keys.contains_key(id_key) {
+                    keys.push((owner.clone(), column("_id")));
+                }
+            }
+        }
+    }
+    for morph in morphs {
+        for suffix in ["_type", "_id"] {
+            let column = LitStr::new(&format!("{}{suffix}", morph.columns), morph.ident.span());
+            keys.push((table.to_owned(), column));
+        }
+    }
+    keys
+}
+
+/// Errors for `(table, column)` pairs whose table is in the snapshot without the column.
+pub(crate) fn check_keys(snapshot: &Snapshot, keys: &[(String, LitStr)]) -> syn::Result<()> {
+    let file = &snapshot.file;
+    let errors = keys.iter().filter_map(|(table, column)| {
+        let columns = snapshot.tables.get(&table.to_lowercase())?;
+        (!columns.contains_key(&column.value().to_lowercase())).then(|| {
+            syn::Error::new_spanned(
+                column,
+                format!(
+                    "table `{table}` has no column `{}` in {file}",
+                    column.value()
+                ),
+            )
+        })
+    });
+    combine(errors).map_or(Ok(()), Err)
 }
 
 /// `T` of `Name<T>`.
@@ -329,10 +759,6 @@ mod tests {
             column("point", parse_quote!(Point)),
         ];
         assert_eq!(errors(MYSQL, "USERS", &columns), Vec::<String>::new());
-        assert_eq!(
-            errors(MYSQL, "other_schema.users", &columns),
-            Vec::<String>::new()
-        );
     }
 
     #[test]
@@ -385,6 +811,166 @@ mod tests {
         assert_eq!(errors(oracle, "users", &columns), Vec::<String>::new());
         let columns = [column("price", parse_quote!(i64))];
         assert_eq!(errors(oracle, "users", &columns).len(), 1);
+    }
+
+    #[test]
+    fn checks_relation_keys() {
+        let snapshot = Snapshot::parse(
+            "users\tid\tnot null\tbigint\n\
+             users\tuuid\tnot null\tvarchar(36)\n\
+             users\tcommentable_type\tnull\tvarchar(50)\n\
+             users\tcommentable_id\tnull\tbigint\n\
+             posts\tuser_id\tnot null\tbigint\n\
+             role_user\tuser_id\tnot null\tbigint\n\
+             role_user\trole_id\tnot null\tbigint\n\
+             taggables\ttaggable_type\tnot null\tvarchar(50)\n",
+        )
+        .unwrap();
+        let mut item: syn::ItemStruct = parse_quote! {
+            struct User {
+                #[rustique(has_many(Post, foreign_key = "user_id", local_key = "uuid"))]
+                posts: Rel<Vec<Post>>,
+                #[rustique(has_many(Post, foreign_key = "author_id", local_key = "nope"))]
+                bad_posts: Rel<Vec<Post>>,
+                // No `comments` table in the snapshot: skipped.
+                #[rustique(has_many(Comment, foreign_key = "anything"))]
+                comments: Rel<Vec<Comment>>,
+                #[rustique(belongs_to_many(Role, foreign_pivot_key = "user_id", related_pivot_key = "rol_id", pivot = ["level"]))]
+                roles: Rel<Vec<Role>>,
+                // `taggables` has `taggable_type` but no `taggable_id`.
+                #[rustique(morph_to_many(Tag, name = "taggable"))]
+                tags: Rel<Vec<Tag>>,
+                #[rustique(morph_to)]
+                commentable: Rel<Option<Commentable>>,
+                #[rustique(morph_to)]
+                owner: Rel<Option<Owner>>,
+            }
+        };
+        let syn::Fields::Named(named) = &mut item.fields else {
+            unreachable!()
+        };
+        let fields = crate::ModelFields::parse(&mut named.named, None).unwrap();
+        let keys = relation_keys("users", &item.ident, &fields.relations, &fields.morphs);
+        let mut errors: Vec<String> = check_keys(&snapshot, &keys)
+            .err()
+            .into_iter()
+            .flatten()
+            .map(|e| e.to_string())
+            .collect();
+        errors.sort();
+        assert_eq!(
+            errors,
+            [
+                "table `posts` has no column `author_id` in rustique-schema.txt",
+                "table `role_user` has no column `level` in rustique-schema.txt",
+                "table `role_user` has no column `rol_id` in rustique-schema.txt",
+                "table `taggables` has no column `taggable_id` in rustique-schema.txt",
+                "table `users` has no column `nope` in rustique-schema.txt",
+                "table `users` has no column `owner_id` in rustique-schema.txt",
+                "table `users` has no column `owner_type` in rustique-schema.txt",
+            ]
+        );
+    }
+
+    #[test]
+    fn checks_column_strings() {
+        let snapshot = Snapshot::parse(MYSQL).unwrap();
+        let check = |value: &str, strict| {
+            check_reference(&snapshot, &LitStr::new(value, Span::call_site()), strict)
+                .err()
+                .map(|e| e.to_string())
+        };
+        for ok in [
+            "users.email",
+            "USERS.EMAIL",
+            "users.*",
+            "email",
+            "a.b.c",
+            "count(*)",
+        ] {
+            assert_eq!(check(ok, true), None, "{ok}");
+        }
+        assert_eq!(
+            check("users.mail", false).unwrap(),
+            "table `users` has no column `mail` in rustique-schema.txt"
+        );
+        assert_eq!(
+            check("posts.id", true).unwrap(),
+            "table `posts` is not in rustique-schema.txt"
+        );
+        assert_eq!(check("posts.id", false), None);
+        assert_eq!(
+            check("mail", true).unwrap(),
+            "no table has a column `mail` in rustique-schema.txt"
+        );
+        assert_eq!(check("mail", false), None);
+
+        let mut found = Vec::new();
+        column_literals(
+            quote! {
+                fn scope_x(q: Query<User>) -> Query<User> {
+                    q.where_("users.a", "=", 1)
+                        .select(["users.b", "users.c"])
+                        .where_has("posts.comments", |p| p.order_by("posts.d"))
+                        .where_(name, "=", 1)
+                        .where_raw("users.e = 1")
+                }
+            },
+            &mut found,
+        );
+        let found: Vec<String> = found.iter().map(LitStr::value).collect();
+        assert_eq!(found, ["users.a", "users.b", "users.c", "posts.d"]);
+    }
+
+    #[test]
+    fn checks_raw_sql() {
+        let snapshot = Snapshot::parse(
+            "users\tid\tnot null\tbigint\n\
+             users\temail\tnot null\tvarchar(255)\n\
+             posts\tid\tnot null\tbigint\n\
+             posts\tuser_id\tnot null\tbigint\n",
+        )
+        .unwrap();
+        let check = |sql: &str| check_sql(&snapshot, sql).err();
+        for ok in [
+            "SELECT u.id, users.email FROM users u JOIN posts ON posts.user_id = users.id",
+            "select * from USERS where Users.Email = ?",
+            "INSERT INTO users (id, email) VALUES (?, ?)",
+            "UPDATE users SET email = ? WHERE users.id = :id",
+            "DELETE FROM posts WHERE user_id IN (SELECT id FROM users)",
+            // Skipped: functions, strings, comments, CTEs, other schemas, dual, aliases.
+            "SELECT EXTRACT(YEAR FROM created) FROM users",
+            "SELECT 'FROM nope' FROM users -- JOIN nope\n /* FROM nope */",
+            "WITH x AS (SELECT 1) SELECT * FROM x",
+            "SELECT * FROM other.table_x JOIN `quoted` ON 1 = 1",
+            "SELECT 1 FROM dual",
+            "SELECT p.nope FROM users p",
+            "INSERT INTO users (id) VALUES (1) ON DUPLICATE KEY UPDATE nope = 1",
+            "SELECT x INTO v FROM users",
+            "SELECT * FROM users WHERE a IS DISTINCT FROM b",
+            "SELECT 'it\\'s FROM nope' FROM users",
+            "SELECT users.id FROM users FOR UPDATE",
+            // Unqualified columns are not checked.
+            "UPDATE posts SET title = ?",
+        ] {
+            assert_eq!(check(ok), None, "{ok}");
+        }
+        assert_eq!(
+            check("SELECT * FROM users JOIN comments ON 1 = 1").unwrap(),
+            "table `comments` is not in rustique-schema.txt"
+        );
+        assert_eq!(
+            check("SELECT * FROM (SELECT * FROM nope) x").unwrap(),
+            "table `nope` is not in rustique-schema.txt"
+        );
+        assert_eq!(
+            check("SELECT posts.title FROM posts").unwrap(),
+            "table `posts` has no column `title` in rustique-schema.txt"
+        );
+        assert_eq!(
+            check("INSERT INTO post (id) VALUES (1)").unwrap(),
+            "table `post` is not in rustique-schema.txt"
+        );
     }
 
     #[test]

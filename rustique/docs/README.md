@@ -64,9 +64,11 @@ user.delete(&db).await?;                               // soft delete (sets dele
 let posts = user.posts().where_("published", "=", true).get(&db).await?; // lazy relation query
 let users = User::query().with_where("posts", |q| q.where_("published", "=", true)).get(&db).await?;
 let users = User::query().with("posts:id,title").get(&db).await?;   // only those columns of posts
+let posts = Post::query().order_by(rustique::col!("posts.id")).get(&db).await?; // checked with `schema-check`
 let page = User::query().cursor_paginate(&db, 50, None).await?;  // page.next_cursor for the next one
 let ann = User::first_or_create(&db, vec![(User::EMAIL, "a@x.io".into())], vec![]).await?;
 for post in user.posts.loaded()? { /* after with("posts") or user.load(&db, "posts") */ }
+let rows = db.select(rustique::sql!("SELECT id FROM users WHERE id > ?"), [10.into()]).await?; // raw SQL, checked with `schema-check`
 
 let tx = db.begin().await?;
 user.force_delete(&tx).await?;
@@ -84,3 +86,4 @@ Rules worth knowing before you write code:
 6. Turn on `rustique::prevent_lazy_loading(rustique::LazyLoading::Deny)` in development to catch N+1 loops.
 7. Timestamps are UTC unless `rustique::set_timezone(...)` sets the application time zone (Laravel's `app.timezone`) at startup.
 8. Schema changes: edit `rustique-schema.txt` (written by `schema:snapshot`), then `make:migration <name> --diff` writes the migration from the database to it ([details](migrations.md#migrations-from-a-schema-diff)).
+9. With the `schema-check` feature, models, relation keys, `col!("t.c")`, `sql!("...")` and `"t.c"` strings in scopes are checked against `rustique-schema.txt` at compile time; `schema = "billing"` (on models, scopes, `col!`, `sql!`) reads `rustique-schema.billing.txt`. See [the schema check](migrations.md#compile-time-schema-check).

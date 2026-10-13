@@ -32,10 +32,12 @@
 //!   described by the snapshot file (`--snapshot <file>`, default
 //!   `rustique-schema.txt`) and `down` turns it back; nothing is written when
 //!   they match.
-//! - `schema:snapshot [--path <file>]`: writes the columns of every table to
-//!   `<file>` (default `rustique-schema.txt`), for the compile-time check of
-//!   `#[rustique::model]` structs (cargo feature `schema-check`). Run it from the
-//!   directory of the crate that defines the models, after migrating.
+//! - `schema:snapshot [--name <name>] [--path <file>]`: writes the columns of
+//!   every table to `<file>` (default `rustique-schema.txt`, or
+//!   `rustique-schema.<name>.txt` with `--name`, read by models with
+//!   `schema = "<name>"`), for the compile-time check of `#[rustique::model]`
+//!   structs (cargo feature `schema-check`). Run it from the directory of the
+//!   crate that defines the models, after migrating.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
@@ -56,7 +58,9 @@ commands:
   make:migration <name> [--path <dir>] [--diff [--snapshot <file>]]
                                            create a migration file; with --diff, from the
                                            database to the schema snapshot
-  schema:snapshot [--path <file>]          write the schema snapshot for the compile-time model check";
+  schema:snapshot [--name <n>] [--path <file>]
+                                           write the schema snapshot for the compile-time
+                                           model check (rustique-schema.<n>.txt with --name)";
 
 /// Runs the command in `args` (without the program name) and prints its
 /// output to stdout.
@@ -158,9 +162,25 @@ async fn execute(
             make_migration(Path::new(dir), name, &source)?
         }
         "schema:snapshot" => {
+            let file = match (&args.path, &args.name) {
+                (Some(path), _) => path.clone(),
+                (None, Some(name))
+                    if !name.is_empty()
+                        && name
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')) =>
+                {
+                    format!("rustique-schema.{name}.txt")
+                }
+                (None, Some(name)) => {
+                    return Err(usage(&format!(
+                        "--name may only hold letters, digits, `_` and `-`, not `{name}`"
+                    )));
+                }
+                (None, None) => crate::schema::SNAPSHOT_FILE.to_owned(),
+            };
             let text = crate::schema::snapshot(&args.connect().await?).await?;
-            let file = args.path.as_deref().unwrap_or(crate::schema::SNAPSHOT_FILE);
-            fs::write(file, text)
+            fs::write(&file, text)
                 .map_err(|e| Error::Config(format!("cannot write {file}: {e}")))?;
             vec![format!("Wrote: {file}")]
         }
@@ -187,6 +207,8 @@ struct Args {
     positional: Vec<String>,
     env: Option<String>,
     path: Option<String>,
+    /// `schema:snapshot --name x` writes `rustique-schema.x.txt`.
+    name: Option<String>,
     step: Option<String>,
     snapshot: Option<String>,
     seed: bool,
@@ -206,6 +228,7 @@ impl Args {
             match arg.as_str() {
                 "--env" => parsed.env = Some(value()?),
                 "--path" => parsed.path = Some(value()?),
+                "--name" => parsed.name = Some(value()?),
                 "--step" => parsed.step = Some(value()?),
                 "--seed" => parsed.seed = true,
                 "--force" => parsed.force = true,
@@ -438,6 +461,7 @@ mod tests {
             "migrate:rollback --step",
             "migrate:fresh",
             "migrate:reset --seed",
+            "schema:snapshot --name ../x",
         ] {
             let error = execute_line(line).await.unwrap_err();
             assert!(matches!(error, Error::Config(_)), "{line}: {error}");
