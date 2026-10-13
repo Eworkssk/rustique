@@ -16,7 +16,7 @@ pub use factory::{Factory, HasFactory};
 pub use observer::{Event, Observer, observe};
 pub use prune::Prunable;
 pub(crate) use query::EagerLoad;
-pub use query::{GlobalScope, ModelChunks, ModelCursor, Nested, Query, scope};
+pub use query::{GlobalScope, ModelChunks, ModelCursor, Nested, Query, RelName, scope};
 pub use relation::{
     BoxFuture, FromRelated, LazyLoading, MorphTarget, MorphTo, OfMany, Pivot, Rel, Relation,
     RelationKind, RelationScope, Through, load, load_morph, morph_models, morph_to,

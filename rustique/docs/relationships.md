@@ -148,6 +148,53 @@ let users = User::query()
 
 The closure gets the related query as a `QueryBuilder`. Its conditions are grouped, so an `OR` cannot escape the key filter. The query runs once for all parents; a `limit` / `offset` still applies per parent, as in Eloquent: `with_where("posts", |q| q.order_by_desc("id").limit(3))` loads the 3 newest posts of each user. The rows are numbered with `ROW_NUMBER() OVER (PARTITION BY foreign key ORDER BY <the closure's order, or the related key>)` in a subquery ([`QueryBuilder::limit_per`](query-builder.md#ordering-grouping-limits)). Lazy queries (`user.posts().limit(3)`) limit as usual. Qualify columns of `belongs_to_many` / `has_many_through` relations (`roles.name`), which join a second table.
 
+### Typed constraints
+
+Each relation field also gets an associated constant, `User::POSTS` for `posts`: a `RelName<User, Post>`. `with_typed`, `where_has_typed` and `where_doesnt_have_typed` take it instead of the name, and their closure gets a `Query<Post>`, so `Post`'s `#[rustique::scopes]` work:
+
+```rust
+# use rustique::prelude::*;
+use rustique::Query;
+# #[rustique::model(table = "users")]
+# #[derive(Debug, Clone, Default)]
+# pub struct User { pub id: i64, #[rustique(has_many(Post))] pub posts: Rel<Vec<Post>> }
+#[rustique::model(table = "posts")]
+#[derive(Debug, Clone, Default)]
+pub struct Post { pub id: i64, pub user_id: i64, pub published: bool }
+
+#[rustique::scopes]
+impl Post {
+    fn scope_published(q: Query<Self>) -> Query<Self> {
+        q.where_("posts.published", "=", true)
+    }
+}
+
+let users = User::query()
+    .with_typed(User::POSTS, |q| q.published().order_by_desc("id"))
+    .where_has_typed(User::POSTS, |q| q.published());
+let same = User::query().where_has("posts", |q| q.where_("posts.published", "=", true));
+assert_eq!(users.to_sql(Dialect::MySql)?, same.to_sql(Dialect::MySql)?);
+# Ok::<(), rustique::Error>(())
+```
+
+A relation the model does not have, or one of another model, does not compile:
+
+```rust,compile_fail
+# use rustique::prelude::*;
+# #[rustique::model(table = "users")]
+# #[derive(Debug, Clone, Default)]
+# pub struct User { pub id: i64, #[rustique(has_many(Post))] pub posts: Rel<Vec<Post>> }
+# #[rustique::model(table = "posts")]
+# #[derive(Debug, Clone, Default)]
+# pub struct Post { pub id: i64, pub user_id: i64, #[rustique(has_many(Comment))] pub comments: Rel<Vec<Comment>> }
+# #[rustique::model(table = "comments")]
+# #[derive(Debug, Clone, Default)]
+# pub struct Comment { pub id: i64, pub post_id: i64 }
+let users = User::query().with_typed(Post::COMMENTS, |q| q); // `comments` is Post's relation
+```
+
+The rest stays string-based: nested paths (`"posts.comments"`), `"posts:id,title"` column lists, `morph_to` relations (no constant), and `with_count` / `with_sum` and the other aggregates. `RelName::name()` gives the string when you want the constant there: `with_count(User::POSTS.name())`. The `Query<Post>` in the closure already carries `Post`'s global scopes and soft-delete filter; `with_trashed` and `without_global_scope` inside it have no effect.
+
 ### Selecting columns
 
 `with("relation:col1,col2")` reads only those columns of the related models, like Eloquent's `with('posts:id,title')`. For a nested path the columns belong to its last relation:

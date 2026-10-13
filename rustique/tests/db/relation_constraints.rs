@@ -1,5 +1,5 @@
 //! Relation `scope`, `latest_of_many` / `oldest_of_many`, `with("rel:cols")`
-//! and models read from partial selects.
+//! typed relation constraints and models read from partial selects.
 
 use chrono::NaiveDateTime;
 use rustique::{Executor, Model, Query, Rel, Schema};
@@ -43,6 +43,13 @@ struct Article {
 
 fn published(q: Query<Article>) -> Query<Article> {
     q.where_("orm_rc_articles.published", "=", true)
+}
+
+#[rustique::scopes]
+impl Article {
+    fn scope_titled_like(q: Query<Self>, pattern: &str) -> Query<Self> {
+        q.where_("orm_rc_articles.title", "LIKE", pattern.to_owned())
+    }
 }
 
 fn at(day: u32) -> Option<NaiveDateTime> {
@@ -164,6 +171,19 @@ async fn relation_constraints() {
             .await
             .unwrap();
         assert_eq!(with_dated_first, ["ann"], "{dialect}");
+
+        // Typed constraints: the closure gets `Query<Article>` and its scopes.
+        let authors = Author::query()
+            .with_typed(Author::ARTICLES, |q| q.titled_like("%2"))
+            .where_has_typed(Author::ARTICLES, |q| q.titled_like("b%"))
+            .where_doesnt_have_typed(Author::PUBLISHED_ARTICLES, |q| q.titled_like("a%"))
+            .get(&db)
+            .await
+            .unwrap_or_else(|e| panic!("{dialect}: {e}"));
+        let [bob] = &authors[..] else {
+            panic!("{dialect}: only bob")
+        };
+        assert_eq!(titles(bob.articles.loaded().unwrap()), ["b2"], "{dialect}");
 
         // `with("rel:cols")`: only those columns; the rest take their default.
         let authors = Author::query()

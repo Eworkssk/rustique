@@ -930,7 +930,8 @@ impl RelationField {
         self.keys["name"][0].value()
     }
 
-    /// `user.posts()`, plus `user.roles_pivot()` for `belongs_to_many`.
+    /// `user.posts()` and the typed name `User::POSTS`, plus
+    /// `user.roles_pivot()` for `belongs_to_many`.
     fn methods(&self) -> TokenStream2 {
         let Self {
             ident,
@@ -941,7 +942,11 @@ impl RelationField {
         } = self;
         let doc = format!("Query of the `{name}` relation.");
         let scope = self.scope_fn();
+        let constant = format_ident!("{}", ident.unraw().to_string().to_uppercase());
+        let constant_doc = format!("The `{name}` relation, for `Query::with_typed` and friends.");
         let mut methods = quote! {
+            #[doc = #constant_doc]
+            #vis const #constant: ::rustique::RelName<Self, #related> = ::rustique::RelName::new(#name);
             #[doc = #doc]
             #vis fn #ident(&self) -> ::rustique::Query<#related> {
                 ::rustique::__private::query::<Self, #related>(self, #name, #scope)
