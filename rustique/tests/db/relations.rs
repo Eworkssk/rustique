@@ -1,5 +1,5 @@
 use chrono::NaiveDateTime;
-use rustique::{Db, Dialect, Executor, Model, Rel, Transaction};
+use rustique::{Db, Dialect, Executor, Model, Rel, Schema, Transaction};
 
 use crate::{create_table, databases, drop_table};
 
@@ -481,5 +481,82 @@ async fn composite_key_relations() {
             .collect();
         assert_eq!(products, ["bolt", "bolt", "nut"]);
         assert_eq!(lines[1].notes().count(&db).await.unwrap(), 2);
+    }
+}
+
+#[rustique::model(table = "orm_r_lp_shelves")]
+#[derive(Debug, Clone, Default)]
+struct Shelf {
+    id: i64,
+    #[rustique(has_many(Book))]
+    books: Rel<Vec<Book>>,
+}
+
+#[rustique::model(table = "orm_r_lp_books")]
+#[derive(Debug, Clone, Default)]
+struct Book {
+    id: i64,
+    shelf_id: i64,
+    rank: i64,
+}
+
+/// A `limit` / `offset` in an eager constraint applies to each parent.
+#[tokio::test]
+async fn eager_limit_per_parent() {
+    for db in databases().await {
+        let dialect = db.dialect();
+        for table in ["orm_r_lp_books", "orm_r_lp_shelves"] {
+            Schema::drop_if_exists(&db, table).await.unwrap();
+        }
+        Schema::create(&db, "orm_r_lp_shelves", |t| {
+            t.id();
+        })
+        .await
+        .unwrap();
+        Schema::create(&db, "orm_r_lp_books", |t| {
+            t.id();
+            t.big_integer("shelf_id");
+            t.big_integer("rank");
+        })
+        .await
+        .unwrap();
+        for shelf_id in 1..=3 {
+            Shelf::default().save(&db).await.unwrap();
+            for rank in 1..=5 {
+                let mut book = Book {
+                    shelf_id,
+                    rank,
+                    ..Default::default()
+                };
+                book.save(&db).await.unwrap();
+            }
+        }
+        let ranks = |shelves: &[Shelf]| -> Vec<Vec<i64>> {
+            shelves
+                .iter()
+                .map(|s| s.books.loaded().unwrap().iter().map(|b| b.rank).collect())
+                .collect()
+        };
+
+        let shelves = Shelf::query()
+            .with_where("books", |q| q.order_by_desc("rank").limit(2))
+            .order_by("id")
+            .get(&db)
+            .await
+            .unwrap_or_else(|e| panic!("{dialect}: {e}"));
+        assert_eq!(ranks(&shelves), [[5, 4], [5, 4], [5, 4]], "{dialect}");
+
+        // With an offset; without an order the key numbers the rows.
+        let shelves = Shelf::query()
+            .with_where("books", |q| q.offset(1).limit(3))
+            .order_by("id")
+            .get(&db)
+            .await
+            .unwrap_or_else(|e| panic!("{dialect}: {e}"));
+        assert_eq!(
+            ranks(&shelves),
+            [[2, 3, 4], [2, 3, 4], [2, 3, 4]],
+            "{dialect}"
+        );
     }
 }

@@ -458,10 +458,11 @@ struct RelationField {
     pivot_timestamps: Option<[LitStr; 2]>,
     /// `scope = expr`: a `fn(Query<R>) -> Query<R>` constraining the relation.
     scope: Option<syn::Expr>,
-    /// `latest_of_many [= "column"]` / `oldest_of_many [= "column"]` on
-    /// `has_one` / `morph_one`: the column (the key when `None`) and whether
-    /// the highest value wins.
-    of_many: Option<(Option<LitStr>, bool)>,
+    /// `latest_of_many [= "column"]` / `oldest_of_many [= "column"]` /
+    /// `of_many(column = "max" | "min", ...)` on `has_one` / `morph_one`:
+    /// `(column, highest wins)` ranked before the key, and whether the
+    /// highest key wins ties.
+    of_many: Option<(Vec<(LitStr, bool)>, bool)>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -688,18 +689,45 @@ fn parse_relation(
                 })?);
             }
             Some("scope") => scope = Some(option.value()?.parse()?),
-            Some(key @ ("latest_of_many" | "oldest_of_many"))
+            Some(key @ ("latest_of_many" | "oldest_of_many" | "of_many"))
                 if matches!(kind, RelationKind::HasOne | RelationKind::MorphOne) =>
             {
                 if of_many.is_some() {
-                    return Err(option.error("use one of `latest_of_many` and `oldest_of_many`"));
+                    return Err(
+                        option.error("use one of `latest_of_many`, `oldest_of_many` and `of_many`")
+                    );
                 }
-                let column = if bare {
-                    None
+                if key == "of_many" {
+                    // `of_many(published_at = "max", id = "min")`, like Eloquent's `ofMany([...])`.
+                    let mut columns = Vec::new();
+                    option.parse_nested_meta(|column| {
+                        let name = column
+                            .path
+                            .get_ident()
+                            .ok_or_else(|| column.error("expected a column name"))?;
+                        let aggregate: LitStr = column.value()?.parse()?;
+                        let descending = match aggregate.value().to_ascii_lowercase().as_str() {
+                            "max" => true,
+                            "min" => false,
+                            _ => return Err(column.error("expected `\"max\"` or `\"min\"`")),
+                        };
+                        columns.push((LitStr::new(&name.to_string(), name.span()), descending));
+                        Ok(())
+                    })?;
+                    if columns.is_empty() {
+                        return Err(option.error("expected `of_many(column = \"max\", ...)`"));
+                    }
+                    // Eloquent adds the key as `MAX` when the columns leave it out.
+                    of_many = Some((columns, true));
                 } else {
-                    Some(option.value()?.parse()?)
-                };
-                of_many = Some((column, key == "latest_of_many"));
+                    let descending = key == "latest_of_many";
+                    let columns = if bare {
+                        Vec::new()
+                    } else {
+                        vec![(option.value()?.parse()?, descending)]
+                    };
+                    of_many = Some((columns, descending));
+                }
             }
             Some(key) if kind.options().contains(&key) => {
                 keys.insert(key.to_owned(), parse_keys(option.value()?)?);
@@ -707,7 +735,7 @@ fn parse_relation(
             _ => {
                 let mut options = kind.options().to_vec();
                 if matches!(kind, RelationKind::HasOne | RelationKind::MorphOne) {
-                    options.extend(["latest_of_many", "oldest_of_many"]);
+                    options.extend(["latest_of_many", "oldest_of_many", "of_many"]);
                 }
                 options.push("scope");
                 return Err(option.error(format!(
@@ -965,13 +993,12 @@ impl RelationField {
             RelationKind::MorphMany => quote!(MorphMany),
         };
         let of_many = match &self.of_many {
-            Some((column, descending)) => {
-                let column = match column {
-                    Some(column) => quote!(::core::option::Option::Some(#column)),
-                    None => quote!(::core::option::Option::None),
-                };
+            Some((columns, descending)) => {
+                let columns = columns
+                    .iter()
+                    .map(|(column, desc)| quote!((#column, #desc)));
                 quote!(::core::option::Option::Some(::rustique::__private::OfMany {
-                    column: #column,
+                    columns: &[#(#columns),*],
                     descending: #descending,
                     key: <#related as ::rustique::Model>::PRIMARY_KEY,
                 }))

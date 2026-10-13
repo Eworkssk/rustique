@@ -146,7 +146,7 @@ let users = User::query()
 # Ok(()) }
 ```
 
-The closure gets the related query as a `QueryBuilder`. Its conditions are grouped, so an `OR` cannot escape the key filter. The query runs once for all parents, so a `limit` caps the related rows of all parents together, not per parent. Qualify columns of `belongs_to_many` / `has_many_through` relations (`roles.name`), which join a second table.
+The closure gets the related query as a `QueryBuilder`. Its conditions are grouped, so an `OR` cannot escape the key filter. The query runs once for all parents; a `limit` / `offset` still applies per parent, as in Eloquent: `with_where("posts", |q| q.order_by_desc("id").limit(3))` loads the 3 newest posts of each user. The rows are numbered with `ROW_NUMBER() OVER (PARTITION BY foreign key ORDER BY <the closure's order, or the related key>)` in a subquery ([`QueryBuilder::limit_per`](query-builder.md#ordering-grouping-limits)). Lazy queries (`user.posts().limit(3)`) limit as usual. Qualify columns of `belongs_to_many` / `has_many_through` relations (`roles.name`), which join a second table.
 
 ### Selecting columns
 
@@ -246,6 +246,8 @@ pub struct User {
     pub latest_post: Rel<Option<Post>>,
     #[rustique(has_one(Post, oldest_of_many = "created_at", scope = published))]
     pub first_published_post: Rel<Option<Post>>,
+    #[rustique(has_one(Post, of_many(created_at = "max", id = "min")))]
+    pub newest_post: Rel<Option<Post>>,                              // ties: lowest id
 }
 
 fn published(q: Query<Post>) -> Query<Post> {
@@ -262,7 +264,7 @@ Writes through the relation (`attach`, factories) ignore the scope, as in Eloque
 
 ### One of many
 
-`latest_of_many` / `oldest_of_many` on a `has_one` or `morph_one` keep, of each parent's related rows, the one with the highest / lowest key, like Eloquent's `latestOfMany()` / `oldestOfMany()`. `latest_of_many = "created_at"` ranks by that column instead, ties going to the highest (lowest) key; rows where the column is NULL never win, as with Eloquent's `MAX`. Eager loading, `where_has` and counts pick the same row; `where_has("latest_post", |q| q.where_(...))` tests the latest post, not any post.
+`latest_of_many` / `oldest_of_many` on a `has_one` or `morph_one` keep, of each parent's related rows, the one with the highest / lowest key, like Eloquent's `latestOfMany()` / `oldestOfMany()`. `latest_of_many = "created_at"` ranks by that column instead, ties going to the highest (lowest) key; rows where the column is NULL never win, as with Eloquent's `MAX`. `of_many(published_at = "max", id = "min")` ranks by several columns in order, each `"max"` or `"min"`, like Eloquent's `ofMany(['published_at' => 'max', 'id' => 'min'])`; the key breaks remaining ties (highest wins) unless listed. Eager loading, `where_has` and counts pick the same row; `where_has("latest_post", |q| q.where_(...))` tests the latest post, not any post.
 
 The pick is a `ROW_NUMBER() OVER (PARTITION BY foreign key ORDER BY ...)` subquery over the related table, filtered by the soft-delete filter, global scopes and the relation's `scope` (Eloquent's `ofMany` closure), so `oldest_of_many` with `scope = published` above is the oldest published post. Conditions from `with_where` or a lazy query apply after the pick. The related model needs a single-column key.
 

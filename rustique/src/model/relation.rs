@@ -146,14 +146,15 @@ pub struct Relation {
 }
 
 /// Of a parent's related rows, only the one with the highest (or lowest)
-/// `column`, ties going to the highest (or lowest) key, like Eloquent's
-/// `latestOfMany` / `oldestOfMany`. Rows whose `column` is NULL never win,
-/// as `MAX` ignores them.
+/// `columns`, compared in order, ties going to the key, like Eloquent's
+/// `latestOfMany` / `oldestOfMany` / `ofMany`. Rows with a NULL in one of
+/// `columns` never win, as `MAX` / `MIN` ignore them.
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy)]
 pub struct OfMany {
-    /// The column to rank by; the key when `None`.
-    pub column: Option<&'static str>,
+    /// `(column, descending)` to rank by, before the key.
+    pub columns: &'static [(&'static str, bool)],
+    /// Whether the highest key wins ties, unless `columns` lists the key.
     pub descending: bool,
     /// The related model's primary key.
     pub key: &'static [&'static str],
@@ -280,24 +281,29 @@ impl Relation {
         let &[key] = of_many.key else {
             let mut query = query;
             query.fail(format!(
-                "`latest_of_many` / `oldest_of_many` need a single-column key on `{}`",
+                "`latest_of_many` / `oldest_of_many` / `of_many` need a single-column key on `{}`",
                 self.related_table
             ));
             return query;
         };
         let table = self.related_table;
         let key_column = format!("{table}.{key}");
-        let order = |column: String| Order::Column {
-            column,
-            descending: of_many.descending,
-        };
         let mut ranked = self.join((self.related_query)());
-        let mut orders = vec![order(key_column.clone())];
-        if let Some(column) = of_many.column.filter(|c| *c != key) {
+        let mut orders = Vec::new();
+        let mut key_descending = of_many.descending;
+        for &(column, descending) in of_many.columns {
+            if column == key {
+                key_descending = descending;
+                break; // the key is unique: later columns never decide
+            }
             let column = format!("{table}.{column}");
             ranked = ranked.where_not_null(column.clone());
-            orders.insert(0, order(column));
+            orders.push(Order::Column { column, descending });
         }
+        orders.push(Order::Column {
+            column: key_column.clone(),
+            descending: key_descending,
+        });
         ranked.columns = vec![
             Expr::Column(format!("{key_column} as orm_key")),
             Expr::RowNumber {
@@ -530,6 +536,15 @@ pub async fn load<P: Model, R: Model + Clone, T: FromRelated<R>, E: Executor>(
         let mut builder = nested.constrain(query.builder);
         if builder.columns.is_empty() {
             builder = builder.select([format!("{}.*", R::TABLE)]);
+        }
+        // A constraint's limit applies per parent, as in Eloquent.
+        if builder.limit.is_some() || builder.offset.is_some() {
+            if builder.orders.is_empty() {
+                for key in R::PRIMARY_KEY {
+                    builder = builder.order_by(format!("{}.{key}", R::TABLE));
+                }
+            }
+            builder = builder.limit_per(remote.clone());
         }
         // The matched key travels along under a fixed alias, so models of
         // `through` relations can be grouped too.

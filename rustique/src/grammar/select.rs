@@ -13,6 +13,9 @@ pub(crate) fn select(dialect: Dialect, query: &QueryBuilder) -> Result<Compiled>
 
 /// Writes a full SELECT; also used for subqueries, so bindings stay in order.
 pub(super) fn write(w: &mut Writer, query: &QueryBuilder) {
+    if !query.limit_per.is_empty() && (query.limit.is_some() || query.offset.is_some()) {
+        return group_limit(w, query);
+    }
     if w.dialect == Dialect::Oracle
         && let Some(lock) = query.lock
         && (query.limit.is_some() || query.offset.is_some())
@@ -86,6 +89,37 @@ pub(super) fn write(w: &mut Writer, query: &QueryBuilder) {
             }
         }
     }
+}
+
+/// `limit_per`: `SELECT * FROM (SELECT ..., ROW_NUMBER() OVER (PARTITION BY
+/// columns ORDER BY ...) AS orm_row FROM ...) orm_limited WHERE orm_row > offset
+/// AND orm_row <= offset + limit ORDER BY orm_row`, like Laravel's `groupLimit`.
+fn group_limit(w: &mut Writer, query: &QueryBuilder) {
+    let mut inner = query.clone();
+    let (limit, offset) = (inner.limit.take(), inner.offset.take().unwrap_or(0));
+    let order = std::mem::take(&mut inner.orders);
+    if order.is_empty() {
+        let message = "`limit_per` needs an order to number the rows by";
+        return w.fail(Error::InvalidQuery(message.to_owned()));
+    }
+    if inner.columns.is_empty() {
+        inner
+            .columns
+            .push(Expr::Column(format!("{}.*", inner.table)));
+    }
+    inner.columns.push(Expr::RowNumber {
+        partition: std::mem::take(&mut inner.limit_per),
+        order,
+        alias: "orm_row".to_owned(),
+    });
+    let mut outer = QueryBuilder::from_sub(inner, "orm_limited");
+    if offset > 0 {
+        outer = outer.where_("orm_limited.orm_row", ">", offset);
+    }
+    if let Some(limit) = limit {
+        outer = outer.where_("orm_limited.orm_row", "<=", offset.saturating_add(limit));
+    }
+    write(w, &outer.order_by("orm_limited.orm_row"));
 }
 
 /// Oracle rejects `FOR UPDATE` after a row limit (ORA-02014), so the limited
