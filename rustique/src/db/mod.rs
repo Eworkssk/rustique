@@ -399,9 +399,7 @@ impl Db {
         log::logged(self.dialect(), query, |query| async move {
             match pool {
                 #[cfg(feature = "mysql")]
-                Pool::MySql(pool) => {
-                    mysql::fetch_all(&mut mysql::checkout_for(pool, raw).await?, query).await
-                }
+                Pool::MySql(pool) => mysql::checkout_for(pool, raw).await?.fetch_all(query).await,
                 #[cfg(feature = "oracle")]
                 Pool::Oracle(pool) => pool.fetch_all(query, raw).await,
             }
@@ -414,9 +412,7 @@ impl Db {
         log::logged(self.dialect(), query, |query| async move {
             match &self.pool {
                 #[cfg(feature = "mysql")]
-                Pool::MySql(pool) => {
-                    mysql::execute(&mut mysql::checkout_for(pool, raw).await?, query).await
-                }
+                Pool::MySql(pool) => mysql::checkout_for(pool, raw).await?.execute(query).await,
                 #[cfg(feature = "oracle")]
                 Pool::Oracle(pool) => pool.execute(query, raw).await,
             }

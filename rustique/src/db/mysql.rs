@@ -112,12 +112,61 @@ pub(super) async fn checkout(pool: &Pool) -> Result<mysql_async::Conn> {
 /// may change session state (`SET`, temporary tables, locks) that would leak
 /// into later queries, so its connection is reset on return to the pool,
 /// unless the pool keeps sessions (`DbBuilder::keep_sessions_after_raw_sql`).
-pub(super) async fn checkout_for(pool: &Pool, raw: bool) -> Result<mysql_async::Conn> {
+pub(super) async fn checkout_for(pool: &Pool, raw: bool) -> Result<KillOnDrop> {
     let mut conn = checkout(pool).await?;
     if raw && !pool.keep_sessions {
         conn.reset_connection(true);
     }
-    Ok(conn)
+    Ok(KillOnDrop(Some(conn)))
+}
+
+/// A pooled connection running one statement. Dropped before the statement
+/// finished (its future was dropped), it has the server stop that statement
+/// with `KILL QUERY` from a connection of its own, and only then goes back to
+/// the pool, so the kill cannot reach the connection's next user. There,
+/// `mysql_async` discards the rest of the result (ER_QUERY_INTERRUPTED) or,
+/// if the reply was cut mid-packet, the connection.
+pub(super) struct KillOnDrop(Option<mysql_async::Conn>);
+
+impl KillOnDrop {
+    pub async fn fetch_all(mut self, query: Compiled) -> Result<Vec<Row>> {
+        let rows = fetch_all(self.conn(), query).await;
+        drop(self.0.take()); // finished: back to the pool as it is
+        rows
+    }
+
+    pub async fn execute(mut self, query: Compiled) -> Result<Executed> {
+        let executed = execute(self.conn(), query).await;
+        drop(self.0.take());
+        executed
+    }
+
+    fn conn(&mut self) -> &mut mysql_async::Conn {
+        self.0
+            .as_mut()
+            .expect("taken only once the statement is done")
+    }
+}
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let Some(conn) = self.0.take() else {
+            return;
+        };
+        // Without a runtime the statement runs on, as before.
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let (opts, id) = (conn.opts().clone(), conn.id());
+        runtime.spawn(async move {
+            // A new connection, not one from the pool: the pool may be full.
+            if let Ok(mut killer) = mysql_async::Conn::new(opts).await {
+                let _ = killer.query_drop(format!("KILL QUERY {id}")).await;
+                let _ = killer.disconnect().await;
+            }
+            drop(conn);
+        });
+    }
 }
 
 pub(super) async fn disconnect(pool: Pool) -> Result<()> {
