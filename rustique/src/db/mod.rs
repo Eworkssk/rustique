@@ -73,7 +73,18 @@ pub trait Executor: Sync + sealed::Sealed {
     ///
     /// [`Error::Database`] when the database rejects the query,
     /// [`Error::Decode`] when a column has a type the ORM cannot read.
-    fn fetch_all(&self, query: Compiled) -> impl Future<Output = Result<Vec<Row>>> + Send;
+    fn fetch_all(&self, query: Compiled) -> impl Future<Output = Result<Vec<Row>>> + Send {
+        self.fetch_map(query, Ok)
+    }
+
+    /// As [`fetch_all`](Self::fetch_all), turning each row into a `T` with
+    /// `f` as it arrives, so the rows are never all held at once.
+    #[doc(hidden)]
+    fn fetch_map<T: Send + 'static>(
+        &self,
+        query: Compiled,
+        f: impl FnMut(Row) -> Result<T> + Send + 'static,
+    ) -> impl Future<Output = Result<Vec<T>>> + Send;
 
     /// Runs a statement that returns no rows.
     ///
@@ -193,11 +204,15 @@ impl Executor for AnyExecutor<'_> {
         }
     }
 
-    async fn fetch_all(&self, query: Compiled) -> Result<Vec<Row>> {
+    async fn fetch_map<T: Send + 'static>(
+        &self,
+        query: Compiled,
+        f: impl FnMut(Row) -> Result<T> + Send + 'static,
+    ) -> Result<Vec<T>> {
         match self.0 {
-            AnyInner::Db(db) => db.fetch_all(query).await,
-            AnyInner::Writer(db) => db.fetch_from(&db.pool, query, false).await,
-            AnyInner::Transaction(tx) => tx.fetch_all(query).await,
+            AnyInner::Db(db) => db.fetch_map(query, f).await,
+            AnyInner::Writer(db) => db.fetch_from(&db.pool, query, false, f).await,
+            AnyInner::Transaction(tx) => tx.fetch_map(query, f).await,
         }
     }
 
@@ -221,8 +236,8 @@ impl Executor for AnyExecutor<'_> {
         async move {
             let query = compiled?;
             match self.0 {
-                AnyInner::Db(db) => db.fetch_from(db.pool_for(&query), query, true).await,
-                AnyInner::Writer(db) => db.fetch_from(&db.pool, query, true).await,
+                AnyInner::Db(db) => db.fetch_from(db.pool_for(&query), query, true, Ok).await,
+                AnyInner::Writer(db) => db.fetch_from(&db.pool, query, true, Ok).await,
                 AnyInner::Transaction(tx) => tx.fetch_all(query).await,
             }
         }
@@ -395,15 +410,22 @@ impl Db {
     }
 
     /// `raw`: the query is raw SQL from [`Executor::select`]; see `mysql::checkout_for`.
-    async fn fetch_from(&self, pool: &Pool, query: Compiled, raw: bool) -> Result<Vec<Row>> {
+    /// Rows go through `f` as in [`Executor::fetch_map`].
+    async fn fetch_from<T: Send + 'static>(
+        &self,
+        pool: &Pool,
+        query: Compiled,
+        raw: bool,
+        f: impl FnMut(Row) -> Result<T> + Send + 'static,
+    ) -> Result<Vec<T>> {
         log::logged(self.dialect(), query, |query| async move {
             match pool {
                 #[cfg(feature = "mysql")]
                 Pool::MySql(pool) => {
-                    mysql::fetch_all(&mut mysql::checkout_for(pool, raw).await?, query).await
+                    mysql::fetch_all(&mut mysql::checkout_for(pool, raw).await?, query, f).await
                 }
                 #[cfg(feature = "oracle")]
-                Pool::Oracle(pool) => pool.fetch_all(query, raw).await,
+                Pool::Oracle(pool) => pool.fetch_all(query, raw, f).await,
             }
         })
         .await
@@ -651,8 +673,13 @@ impl Executor for Db {
         }
     }
 
-    async fn fetch_all(&self, query: Compiled) -> Result<Vec<Row>> {
-        self.fetch_from(self.pool_for(&query), query, false).await
+    async fn fetch_map<T: Send + 'static>(
+        &self,
+        query: Compiled,
+        f: impl FnMut(Row) -> Result<T> + Send + 'static,
+    ) -> Result<Vec<T>> {
+        self.fetch_from(self.pool_for(&query), query, false, f)
+            .await
     }
 
     async fn execute(&self, query: Compiled) -> Result<Executed> {
@@ -667,7 +694,8 @@ impl Executor for Db {
         let compiled = grammar::raw(self.dialect(), sql, binds);
         async move {
             let query = compiled?;
-            self.fetch_from(self.pool_for(&query), query, true).await
+            self.fetch_from(self.pool_for(&query), query, true, Ok)
+                .await
         }
     }
 

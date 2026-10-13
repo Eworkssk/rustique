@@ -840,7 +840,7 @@ pub trait Model: Hooks + Sized + Send + Sync + 'static {
             .iter()
             .zip(self.to_values())
             .enumerate()
-            .filter(|(i, (_, value))| original.get(*i) != Some(value))
+            .filter(|(i, (_, value))| !original.get(*i).is_some_and(|o| same(o, value)))
             .map(|(_, (column, value))| (*column, value))
             .collect()
     }
@@ -1000,6 +1000,18 @@ pub(crate) fn hydrate<M: Model>(mut row: Row) -> Result<M> {
     let mut model = M::from_row(&mut row)?;
     sync_original(&mut model);
     Ok(model)
+}
+
+/// Whether a column is unchanged. JSON compares as documents, so text that
+/// differs only in key order (a rebuilt `HashMap`) is not a change.
+fn same(original: &Value, current: &Value) -> bool {
+    match (original, current) {
+        (Value::Json(a), Value::Json(b)) if a != b => {
+            let parse = |s: &str| serde_json::from_str::<serde_json::Value>(s).ok();
+            matches!((parse(a), parse(b)), (Some(a), Some(b)) if a == b)
+        }
+        _ => original == current,
+    }
 }
 
 fn sync_original<M: Model>(model: &mut M) {
@@ -1389,6 +1401,13 @@ async fn update<M: Model>(model: &mut M, db: &impl Executor) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_key_order_is_not_a_change() {
+        let json = |s: &str| Value::Json(s.to_owned());
+        assert!(same(&json(r#"{"a":1,"b":2}"#), &json(r#"{"b":2,"a":1}"#)));
+        assert!(!same(&json(r#"{"a":1,"b":2}"#), &json(r#"{"a":1,"b":3}"#)));
+    }
 
     #[test]
     fn ulids_are_crockford_and_ordered() {

@@ -7,7 +7,7 @@ mod decode;
 mod encode;
 
 pub(crate) use decode::integer;
-pub use decode::{FromValue, ValueError};
+pub use decode::{FromValue, ValueError, parse_json};
 
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use rust_decimal::Decimal;
@@ -41,8 +41,9 @@ pub enum Value {
     DateTime(NaiveDateTime),
     /// Time of day.
     Time(NaiveTime),
-    /// JSON document.
-    Json(serde_json::Value),
+    /// JSON document, as its text. Kept unparsed, so a row holds no
+    /// `serde_json::Value` tree; [`FromValue`] parses it into the target type.
+    Json(String),
 }
 
 impl Value {

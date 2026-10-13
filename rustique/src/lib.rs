@@ -112,6 +112,7 @@ pub mod __private {
         Event, MorphTarget, Nested, OfMany, Relation, RelationKind, RelationScope, Through, load,
         load_morph, morph_models, morph_to, new_ulid, new_uuid, observe, query, scope,
     };
+    pub use crate::value::parse_json;
     pub use {serde, serde_json};
 
     /// `Model::set_value`'s error for a value that does not fit its field.

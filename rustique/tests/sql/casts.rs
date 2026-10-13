@@ -85,12 +85,13 @@ fn json_struct() {
     };
     round_trip(
         settings.clone(),
-        Value::Json(json!({"theme": "dark", "tags": ["a"]})),
+        // Serialized in field order, the text the column receives.
+        Value::Json(r#"{"theme":"dark","tags":["a"]}"#.into()),
     );
     // Oracle 19c returns JSON stored in a CLOB as text
     let text = Value::from(r#"{"theme":"dark","tags":["a"]}"#);
     assert_eq!(Settings::from_value(text).unwrap(), settings);
-    assert!(Settings::from_value(Value::Json(json!({"theme": 1}))).is_err());
+    assert!(Settings::from_value(Value::from(json!({"theme": 1}))).is_err());
 }
 
 #[test]
@@ -128,7 +129,7 @@ fn model_fields_and_bindings() {
             Value::from("a@b.c"),
             Value::from("banned_perm"),
             Value::I64(10),
-            Value::Json(json!({"theme": "dark", "tags": []})),
+            Value::Json(r#"{"theme":"dark","tags":[]}"#.into()),
             Value::Null,
         ]
     );

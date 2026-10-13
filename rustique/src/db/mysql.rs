@@ -148,8 +148,12 @@ pub(super) fn cursor<'a>(pool: &Pool, query: Compiled, buffer: usize) -> Cursor<
 pub(super) struct Conn(Arc<Mutex<mysql_async::Conn>>);
 
 impl Conn {
-    pub async fn fetch_all(&self, query: Compiled) -> Result<Vec<Row>> {
-        fetch_all(&mut *self.0.lock().await, query).await
+    pub async fn fetch_all<T>(
+        &self,
+        query: Compiled,
+        f: impl FnMut(Row) -> Result<T>,
+    ) -> Result<Vec<T>> {
+        fetch_all(&mut *self.0.lock().await, query, f).await
     }
 
     pub async fn execute(&self, query: Compiled) -> Result<Executed> {
@@ -171,12 +175,20 @@ impl Conn {
     }
 }
 
-pub(super) async fn fetch_all(conn: &mut mysql_async::Conn, query: Compiled) -> Result<Vec<Row>> {
+/// The rows of `query`, each turned into a `T` by `f` as it arrives.
+pub(super) async fn fetch_all<T>(
+    conn: &mut mysql_async::Conn,
+    query: Compiled,
+    mut f: impl FnMut(Row) -> Result<T>,
+) -> Result<Vec<T>> {
     let params = params(query.binds)?;
     let mut result = conn.exec_iter(query.sql, params).await.map_err(error)?;
     let columns = Columns::new(result.columns());
-    let rows: Vec<mysql_async::Row> = result.collect().await.map_err(error)?;
-    rows.into_iter().map(|row| columns.row(row)).collect()
+    let mut out = Vec::new();
+    while let Some(row) = result.next().await.map_err(error)? {
+        out.push(f(columns.row(row)?)?);
+    }
+    Ok(out)
 }
 
 /// Sends the rows of `query` to `sink` until they run out or the cursor is
@@ -304,7 +316,7 @@ fn to_mysql(value: Value) -> Result<MyValue> {
             small(t.second()),
             t.nanosecond() / 1000,
         ),
-        Value::Json(j) => MyValue::Bytes(j.to_string().into_bytes()),
+        Value::Json(j) => MyValue::Bytes(j.into_bytes()),
     })
 }
 
@@ -371,9 +383,10 @@ fn from_mysql(value: MyValue, column: &Column) -> Result<Value, ValueError> {
                 .ok_or(invalid("time of day", "invalid time"))?
         }
         MyValue::Bytes(bytes) => match column.column_type() {
-            ColumnType::MYSQL_TYPE_JSON => serde_json::from_slice(&bytes)
-                .map(Value::Json)
-                .map_err(|_| invalid("json", "invalid JSON"))?,
+            // MySQL only stores valid JSON; it is parsed when decoded into a field.
+            ColumnType::MYSQL_TYPE_JSON => Value::Json(
+                String::from_utf8(bytes).map_err(|_| invalid("json", "non-UTF-8 text"))?,
+            ),
             ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
                 let text =
                     String::from_utf8(bytes).map_err(|_| invalid("decimal", "non-UTF-8 text"))?;

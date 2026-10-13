@@ -139,7 +139,7 @@ impl FromValue for String {
         match value {
             Value::String(s) => Ok(s),
             // MySQL JSON columns; Oracle hands the same text over as a string.
-            Value::Json(j) => Ok(j.to_string()),
+            Value::Json(j) => Ok(j),
             other => Err(ValueError::new::<Self>(other.kind())),
         }
     }
@@ -200,15 +200,28 @@ impl FromValue for DateTime<Utc> {
 
 impl FromValue for serde_json::Value {
     fn from_value(value: Value) -> Result<Self, ValueError> {
-        // Oracle 19c stores JSON in CLOB / VARCHAR2, so text must parse too.
-        let invalid = |_| ValueError::new::<Self>("invalid JSON text");
-        match value {
-            Value::Json(j) => Ok(j),
-            Value::String(s) => serde_json::from_str(&s).map_err(invalid),
-            Value::Bytes(b) => serde_json::from_slice(&b).map_err(invalid),
-            other => Err(ValueError::new::<Self>(other.kind())),
-        }
+        parse_json(value, "invalid JSON text")
     }
+}
+
+/// Parses a JSON document straight into `T`, with `invalid` as the error's
+/// `found` when the text does not parse into it. Oracle 19c stores JSON in
+/// CLOB / VARCHAR2, so text and bytes parse too.
+///
+/// # Errors
+///
+/// [`ValueError`] for other values and for text that does not parse into `T`.
+#[doc(hidden)]
+pub fn parse_json<T: serde::de::DeserializeOwned>(
+    value: Value,
+    invalid: &'static str,
+) -> Result<T, ValueError> {
+    let parsed = match value {
+        Value::Json(s) | Value::String(s) => serde_json::from_str(&s),
+        Value::Bytes(b) => serde_json::from_slice(&b),
+        other => return Err(ValueError::new::<T>(other.kind())),
+    };
+    parsed.map_err(|_| ValueError::new::<T>(invalid))
 }
 
 #[cfg(test)]

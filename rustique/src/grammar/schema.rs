@@ -406,7 +406,7 @@ fn literal(w: &mut Writer, value: &Value) {
         Value::F64(n) if n.is_finite() => n.to_string(),
         Value::Decimal(d) => d.to_string(),
         Value::String(s) => string(w.dialect, s),
-        Value::Json(j) => string(w.dialect, &j.to_string()),
+        Value::Json(j) => string(w.dialect, j),
         Value::Time(t) => string(w.dialect, &t.to_string()),
         Value::Date(d) => {
             let date = string(w.dialect, &d.to_string());

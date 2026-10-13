@@ -16,14 +16,14 @@ use tracing::{Instrument, Level, Span};
 
 use super::Executed;
 use crate::grammar::Compiled;
-use crate::{Dialect, Error, Result, Row};
+use crate::{Dialect, Error, Result};
 
 /// Row count of a statement's outcome, for the log.
 pub(super) trait Outcome {
     fn rows(&self) -> u64;
 }
 
-impl Outcome for Vec<Row> {
+impl<T> Outcome for Vec<T> {
     fn rows(&self) -> u64 {
         self.len() as u64
     }

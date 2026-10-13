@@ -212,16 +212,14 @@ fn newtype(inner: &syn::Type) -> (TokenStream2, TokenStream2, TokenStream2) {
 }
 
 fn json(ident: &syn::Ident) -> (TokenStream2, TokenStream2, TokenStream2) {
-    let unknown = unknown("JSON of another shape");
     let message = format!("{ident} cannot be serialized to JSON");
     (
         quote! {
-            // Through `serde_json::Value`, so JSON stored as text (Oracle CLOB) parses too.
-            let json = <::rustique::__private::serde_json::Value as ::rustique::FromValue>::from_value(value)?;
-            ::rustique::__private::serde_json::from_value(json).map_err(|_| #unknown)
+            // Straight from the text, without a `serde_json::Value` tree in between.
+            ::rustique::__private::parse_json(value, "JSON of another shape")
         },
         quote! {
-            ::rustique::Value::Json(::rustique::__private::serde_json::to_value(value).expect(#message))
+            ::rustique::Value::Json(::rustique::__private::serde_json::to_string(&value).expect(#message))
         },
         quote! {},
     )

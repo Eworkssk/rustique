@@ -95,7 +95,11 @@ fn from_json(json: &Json) -> Option<Value> {
         "date" => Value::Date(FromStr::from_str(text()?).ok()?),
         "dt" => Value::DateTime(FromStr::from_str(text()?).ok()?),
         "t" => Value::Time(FromStr::from_str(text()?).ok()?),
-        "j" => Value::Json(payload?.clone()),
+        // Cursors made before `Value::Json` held text carry the document itself.
+        "j" => Value::Json(match payload? {
+            Json::String(text) => text.clone(),
+            document => document.to_string(),
+        }),
         _ => return None,
     })
 }
@@ -281,10 +285,16 @@ mod tests {
                 Value::Date(day),
                 Value::DateTime(day.and_hms_micro_opt(1, 2, 3, 4).unwrap()),
                 Value::Bool(true),
+                Value::Json(r#"{"a":[1]}"#.into()),
             ],
             next: false,
         };
         assert_eq!(Cursor::decode(&cursor.encode()), Some(cursor));
+        // Cursors made before `Value::Json` held text still decode.
+        let old = json!({ "n": true, "v": [["j", {"a": [1]}]] }).to_string();
+        let old: String = old.bytes().map(|b| format!("{b:02x}")).collect();
+        let decoded = Cursor::decode(&old).unwrap();
+        assert_eq!(decoded.values, [Value::Json(r#"{"a":[1]}"#.into())]);
         assert_eq!(Cursor::decode("zz"), None);
         assert_eq!(Cursor::decode("7b7d"), None); // `{}`
     }

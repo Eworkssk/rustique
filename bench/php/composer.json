@@ -1,0 +1,13 @@
+{
+    "name": "bench/eloquent",
+    "authors": [
+        {
+            "name": "lamka02sk",
+            "email": "mail@samuelillo.com"
+        }
+    ],
+    "require": {
+        "illuminate/database": "^13.35",
+        "yajra/laravel-oci8": "^13.14"
+    }
+}

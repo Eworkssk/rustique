@@ -73,4 +73,4 @@ Override `FromValue::from_oracle_null` to return a value for Oracle `NULL`s (as 
 
 ## `Value`
 
-`Value` is the enum every binding and column passes through: `Null`, `Bool`, `I64`, `U64`, `F64`, `Decimal`, `String`, `Bytes`, `Date`, `DateTime`, `Time`, `Json`. `DateTime` carries no zone: wall-clock time in UTC, or in the zone set with `rustique::set_timezone` (see [timestamps](models.md#timestamps)).
+`Value` is the enum every binding and column passes through: `Null`, `Bool`, `I64`, `U64`, `F64`, `Decimal`, `String`, `Bytes`, `Date`, `DateTime`, `Time`, `Json`. `Json` holds the document as text: rows keep it unparsed, and it is parsed straight into the field's type (your `#[cast(json)]` type, or `serde_json::Value`). `#[cast(json)]` writes struct fields in declaration order, so compare `Json` values as text only when both sides come from the same type. `DateTime` carries no zone: wall-clock time in UTC, or in the zone set with `rustique::set_timezone` (see [timestamps](models.md#timestamps)).

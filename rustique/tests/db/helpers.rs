@@ -51,19 +51,19 @@ async fn dates_json_unions_and_increments() {
             vec![
                 "a".into(),
                 at(10, 23, 59, 59).into(),
-                Value::Json(json!({"theme": "dark", "tags": ["x", "y"], "beta": true, "level": 5})),
+                Value::from(json!({"theme": "dark", "tags": ["x", "y"], "beta": true, "level": 5})),
                 1.into(),
             ],
             vec![
                 "b".into(),
                 at(11, 0, 0, 0).into(),
-                Value::Json(json!({"theme": "light", "level": 10})),
+                Value::from(json!({"theme": "light", "level": 10})),
                 2.into(),
             ],
             vec![
                 "c".into(),
                 at(11, 12, 0, 0).into(),
-                Value::Json(json!({"theme": "dark", "level": 2})),
+                Value::from(json!({"theme": "dark", "level": 2})),
                 3.into(),
             ],
         ];

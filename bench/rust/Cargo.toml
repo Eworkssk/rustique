@@ -1,0 +1,21 @@
+[package]
+name = "orm-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone: keeps diesel out of the ORM's own workspace and lock file.
+[workspace]
+
+[dependencies]
+chrono = "0.4"
+diesel = { version = "2.2", default-features = false, features = ["mysql", "chrono", "serde_json"] }
+diesel-oci = { version = "0.5", features = ["chrono"] }
+rustique-orm = { path = "../../rustique", default-features = false, features = ["mysql", "oracle"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

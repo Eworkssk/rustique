@@ -770,8 +770,11 @@ impl<M: Model> Query<M> {
     ///
     /// Compile, database and decode errors.
     pub async fn get(&self, db: &impl Executor) -> Result<Collection<M>> {
-        let rows = self.clone().into_builder().get(db).await?;
-        self.hydrate(db, rows.into_inner()).await
+        // Each row becomes a model as it arrives, so the rows are never all held at once.
+        let models = db
+            .fetch_map(self.to_sql(db.dialect())?, self.row_to_model())
+            .await?;
+        self.finish(db, models).await
     }
 
     /// Builds models from `rows` and eager-loads their relations.
@@ -780,34 +783,48 @@ impl<M: Model> Query<M> {
         db: &impl Executor,
         rows: Vec<Row>,
     ) -> Result<Collection<M>> {
-        let siblings = rows.len() > 1;
+        let models = rows
+            .into_iter()
+            .map(self.row_to_model())
+            .collect::<Result<_>>()?;
+        self.finish(db, models).await
+    }
+
+    /// Builds one model from one row of this query.
+    fn row_to_model(&self) -> impl FnMut(Row) -> Result<M> + Send + 'static {
         // `select(["id", "name"])` or `with("posts:id,title")`: the other
         // columns take their `Default`, as Eloquent leaves them unset.
         let partial = !self.builder.columns.is_empty()
             && !(self.builder.columns.iter())
                 .any(|c| matches!(c, Expr::Column(c) if c == "*" || c.ends_with(".*")));
+        let aliases: Vec<String> = self.pivot.iter().map(|(a, _)| a.clone()).collect();
         let pivot_columns: Arc<[String]> =
             self.pivot.iter().map(|(_, c)| (*c).to_owned()).collect();
-        let mut models = rows
-            .into_iter()
-            .map(|mut row| {
-                if partial {
-                    row.set_partial();
-                }
-                let pivot = if self.pivot.is_empty() {
-                    None
-                } else {
-                    let values = (self.pivot.iter())
-                        .map(|(alias, _)| row.take::<Value>(alias))
-                        .collect::<Result<_>>()?;
-                    Some(Row::new(Arc::clone(&pivot_columns), values, row.dialect()))
-                };
-                let mut model: M = hydrate(row)?;
-                model.meta_mut().pivot = pivot;
-                model.meta_mut().siblings = siblings;
-                Ok(model)
-            })
-            .collect::<Result<Collection<M>>>()?;
+        move |mut row| {
+            if partial {
+                row.set_partial();
+            }
+            let pivot = if aliases.is_empty() {
+                None
+            } else {
+                let values = (aliases.iter())
+                    .map(|alias| row.take::<Value>(alias))
+                    .collect::<Result<_>>()?;
+                Some(Row::new(Arc::clone(&pivot_columns), values, row.dialect()))
+            };
+            let mut model: M = hydrate(row)?;
+            model.meta_mut().pivot = pivot;
+            Ok(model)
+        }
+    }
+
+    /// Marks models loaded together as siblings and eager-loads their relations.
+    async fn finish(&self, db: &impl Executor, models: Vec<M>) -> Result<Collection<M>> {
+        let siblings = models.len() > 1;
+        let mut models = Collection::from(models);
+        for model in models.iter_mut() {
+            model.meta_mut().siblings = siblings;
+        }
         eager_load(db, &mut models, &self.eager).await?;
         Ok(models)
     }

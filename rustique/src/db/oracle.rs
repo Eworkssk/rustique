@@ -124,9 +124,15 @@ impl Pool {
     }
 
     /// `raw`: `query` is raw SQL from `Db::select`; see [`changes_session`].
-    pub async fn fetch_all(&self, query: Compiled, raw: bool) -> Result<Vec<Row>> {
+    pub async fn fetch_all<T: Send + 'static>(
+        &self,
+        query: Compiled,
+        raw: bool,
+        f: impl FnMut(Row) -> Result<T> + Send + 'static,
+    ) -> Result<Vec<T>> {
         let discard = raw && !self.keep_sessions && changes_session(&query.sql);
-        self.run(discard, move |conn| fetch_all(conn, &query)).await
+        self.run(discard, move |conn| fetch_all(conn, &query, f))
+            .await
     }
 
     /// `raw`: `query` is raw SQL from `Db::statement`; see [`changes_session`].
@@ -285,8 +291,12 @@ impl Conn {
         .await
     }
 
-    pub async fn fetch_all(&self, query: Compiled) -> Result<Vec<Row>> {
-        self.run(move |conn| fetch_all(conn, &query)).await
+    pub async fn fetch_all<T: Send + 'static>(
+        &self,
+        query: Compiled,
+        f: impl FnMut(Row) -> Result<T> + Send + 'static,
+    ) -> Result<Vec<T>> {
+        self.run(move |conn| fetch_all(conn, &query, f)).await
     }
 
     pub async fn execute(&self, query: Compiled) -> Result<Executed> {
@@ -439,16 +449,28 @@ fn error(e: oracle::Error) -> Error {
     }
 }
 
-fn fetch_all(conn: &Connection, query: &Compiled) -> Result<Vec<Row>> {
+/// The rows of `query`, each turned into a `T` by `f` as it arrives.
+fn fetch_all<T>(
+    conn: &Connection,
+    query: &Compiled,
+    mut f: impl FnMut(Row) -> Result<T>,
+) -> Result<Vec<T>> {
     if query.returning > 0 {
-        return fetch_out_binds(conn, query);
+        return fetch_out_binds(conn, query)?.into_iter().map(f).collect();
     }
-    let mut rows = Vec::new();
-    for_each_row(conn, query, |row| {
-        rows.push(row);
-        true
+    let mut out = Vec::new();
+    let mut failed = None;
+    for_each_row(conn, query, |row| match f(row) {
+        Ok(value) => {
+            out.push(value);
+            true
+        }
+        Err(error) => {
+            failed = Some(error);
+            false
+        }
     })?;
-    Ok(rows)
+    failed.map_or(Ok(out), Err)
 }
 
 /// Runs a PL/SQL block whose last `query.returning` placeholders are
@@ -639,10 +661,8 @@ impl ToSql for Value {
             Self::DateTime(dt) => dt.oratype(conn),
             // Oracle has no TIME type; times travel as `HH:MM:SS[.f]` text.
             Self::Time(t) => Ok(varchar(&t.to_string())),
-            Self::Json(j) => match j.to_string() {
-                text if text.len() > MAX_INLINE_BIND => Ok(OracleType::CLOB),
-                text => Ok(varchar(&text)),
-            },
+            Self::Json(j) if j.len() > MAX_INLINE_BIND => Ok(OracleType::CLOB),
+            Self::Json(j) => Ok(varchar(j)),
         }
     }
 
@@ -659,7 +679,7 @@ impl ToSql for Value {
             Self::Date(d) => value.set(d),
             Self::DateTime(dt) => value.set(dt),
             Self::Time(t) => value.set(&t.to_string()),
-            Self::Json(j) => value.set(&j.to_string()),
+            Self::Json(j) => value.set(j),
         }
     }
 }

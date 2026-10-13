@@ -24,7 +24,12 @@ impl_from! {
     String => String, &str => String, &String => String,
     Vec<u8> => Bytes, &[u8] => Bytes,
     NaiveDate => Date, NaiveDateTime => DateTime, NaiveTime => Time,
-    serde_json::Value => Json,
+}
+
+impl From<serde_json::Value> for Value {
+    fn from(value: serde_json::Value) -> Self {
+        Self::Json(value.to_string())
+    }
 }
 
 impl From<DateTime<Utc>> for Value {

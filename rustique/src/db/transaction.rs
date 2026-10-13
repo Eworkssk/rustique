@@ -250,14 +250,18 @@ impl Executor for Transaction {
         async move { self.execute(compiled?).await }
     }
 
-    async fn fetch_all(&self, query: Compiled) -> Result<Vec<Row>> {
+    async fn fetch_map<T: Send + 'static>(
+        &self,
+        query: Compiled,
+        f: impl FnMut(Row) -> Result<T> + Send + 'static,
+    ) -> Result<Vec<T>> {
         self.idle()?;
         log::logged(self.dialect(), query, |query| async move {
             match &self.conn {
                 #[cfg(feature = "mysql")]
-                Conn::MySql(conn) => conn.fetch_all(query).await,
+                Conn::MySql(conn) => conn.fetch_all(query, f).await,
                 #[cfg(feature = "oracle")]
-                Conn::Oracle(conn) => conn.fetch_all(query).await,
+                Conn::Oracle(conn) => conn.fetch_all(query, f).await,
             }
         })
         .await
