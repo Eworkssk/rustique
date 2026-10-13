@@ -228,7 +228,7 @@ The database URL comes from `$DATABASE_URL`, or the variable named by `--env VAR
 
 `migrate:reset` and `migrate:fresh` wipe the database, so without `--force` they stop with an error before connecting.
 
-`make:migration` does not register the module: add it to `migrations![...]` yourself. Migrations, schema checks and `migrate:status` always run on the main database, never a [read replica](database.md#read-replicas).
+`make:migration` registers the module itself: it adds `mod <module>;` and the module to the `migrations![...]` list in the directory's `mod.rs`. Without a `mod.rs` holding such a list it prints a hint and you add the lines yourself. Migrations, schema checks and `migrate:status` always run on the main database, never a [read replica](database.md#read-replicas).
 
 ## Compile-time schema check
 
