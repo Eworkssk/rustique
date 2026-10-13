@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "../README.md"
-documentation = "https://docs.rs/rustique-orm"
+documentation = "https://rustique.eworks.sk/docs/"
 keywords = ["orm", "mysql", "oracle", "eloquent", "database"]
 categories = ["database"]
 

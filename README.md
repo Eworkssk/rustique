@@ -14,9 +14,9 @@
 **Active-record models, a fluent query builder, relations, migrations and factories.**
 **One API, two SQL dialects.**
 
-[Documentation](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/README.md) ·
-[Getting started](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/getting-started.md) ·
-[Cheat sheet](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/README.md#cheat-sheet)
+[Documentation](https://rustique.eworks.sk/docs/) ·
+[Getting started](https://rustique.eworks.sk/docs/getting-started/) ·
+[Cheat sheet](https://rustique.eworks.sk/docs/#cheat-sheet)
 
 </div>
 
@@ -167,18 +167,18 @@ The pages follow the Laravel Eloquent docs layout. Every code block compiles as 
 
 | | |
 |---|---|
-| [Getting started](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/getting-started.md) | Install, features, connecting, pool and TLS |
-| [Query builder](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/query-builder.md) | Selects, wheres, joins, aggregates, writes |
-| [Models](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/models.md) | Retrieving, saving, timestamps, soft deletes, dirty tracking |
-| [Relationships](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/relationships.md) | All relation kinds, eager loading, pivots |
-| [Casts](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/casts.md) | `Cast`, `FromValue`, custom types |
-| [Scopes, hooks and observers](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/events.md) | Reusable filters and lifecycle events |
-| [Pagination, chunking and cursors](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/large-results.md) | Working with big tables |
-| [Transactions and raw SQL](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/database.md) | Replicas, nested transactions, retries, logging |
-| [Factories](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/factories.md) | Test data and seeding |
-| [Schema and migrations](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/migrations.md) | Schema builder, `Migrator`, CLI |
-| [Database differences](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/dialects.md) | What changes between MySQL and Oracle |
-| [Eloquent compatibility](https://github.com/Eworkssk/rustique/blob/main/rustique/docs/eloquent-compatibility.md) | What maps to Laravel, what does not |
+| [Getting started](https://rustique.eworks.sk/docs/getting-started/) | Install, features, connecting, pool and TLS |
+| [Query builder](https://rustique.eworks.sk/docs/query-builder/) | Selects, wheres, joins, aggregates, writes |
+| [Models](https://rustique.eworks.sk/docs/models/) | Retrieving, saving, timestamps, soft deletes, dirty tracking |
+| [Relationships](https://rustique.eworks.sk/docs/relationships/) | All relation kinds, eager loading, pivots |
+| [Casts](https://rustique.eworks.sk/docs/casts/) | `Cast`, `FromValue`, custom types |
+| [Scopes, hooks and observers](https://rustique.eworks.sk/docs/events/) | Reusable filters and lifecycle events |
+| [Pagination, chunking and cursors](https://rustique.eworks.sk/docs/large-results/) | Working with big tables |
+| [Transactions and raw SQL](https://rustique.eworks.sk/docs/database/) | Replicas, nested transactions, retries, logging |
+| [Factories](https://rustique.eworks.sk/docs/factories/) | Test data and seeding |
+| [Schema and migrations](https://rustique.eworks.sk/docs/migrations/) | Schema builder, `Migrator`, CLI |
+| [Database differences](https://rustique.eworks.sk/docs/dialects/) | What changes between MySQL and Oracle |
+| [Eloquent compatibility](https://rustique.eworks.sk/docs/eloquent-compatibility/) | What maps to Laravel, what does not |
 
 ## Development
 
