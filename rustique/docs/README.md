@@ -15,7 +15,7 @@ The pages follow the layout of the Laravel Eloquent docs, so if you know Laravel
 | [Pagination, chunking and cursors](large-results.md) | `paginate`, `simple_paginate`, `cursor_paginate`, `chunk`, `chunk_by_id`, `cursor` |
 | [Transactions and raw SQL](database.md) | read replicas, `begin`, `transaction(\|tx\| ...)`, deadlock retries, nested transactions, `rollback_after` for tests, savepoints, `select` / `statement`, errors, query logging |
 | [Factories](factories.md) | `HasFactory`, `factory()`, `count`, `state`, `sequence`, `make` / `create`, `has` / `has_attached`, `for_` / `for_factory`, `recycle`, `after_making` / `after_creating` |
-| [Schema and migrations](migrations.md) | `Schema`, `Blueprint`, `change()`, `use_current`, comments, `Migrator` (`fresh`, `reset`, `--step`), seeders, `migrations!`, the CLI, the compile-time schema check |
+| [Schema and migrations](migrations.md) | `Schema`, `Blueprint`, `change()`, `use_current`, comments, `Migrator` (`fresh`, `reset`, `--step`), seeders, `migrations!`, the CLI, migrations from a schema diff (`make:migration --diff`), the compile-time schema check |
 | [Database differences](dialects.md) | What changes between MySQL and Oracle |
 
 ## Cheat sheet
@@ -83,3 +83,4 @@ Rules worth knowing before you write code:
 5. Oracle identifiers are uppercased and quoted. Write lowercase names in Rust.
 6. Turn on `rustique::prevent_lazy_loading(rustique::LazyLoading::Deny)` in development to catch N+1 loops.
 7. Timestamps are UTC unless `rustique::set_timezone(...)` sets the application time zone (Laravel's `app.timezone`) at startup.
+8. Schema changes: edit `rustique-schema.txt` (written by `schema:snapshot`), then `make:migration <name> --diff` writes the migration from the database to it ([details](migrations.md#migrations-from-a-schema-diff)).

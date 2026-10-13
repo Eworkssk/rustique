@@ -120,6 +120,68 @@ pub(crate) fn has_table(dialect: Dialect, table: &str, column: Option<&str>) -> 
     raw(dialect, sql, binds.into_iter().flatten())
 }
 
+/// The inverse of `mysql::column_type` / `oracle::column_type`: the
+/// [`ColumnType`] of a type as the schema snapshot reports it (`varchar(50)`,
+/// `bigint unsigned`, `NUMBER(19,0)`, `VARCHAR2(50)`), and whether it is
+/// unsigned. `None` for a type no [`Blueprint`] method declares.
+///
+/// It renders each candidate through the forward mapping and compares, so the
+/// two cannot drift apart; a new [`ColumnType`] only needs adding to the list.
+pub(crate) fn parse_column_type(dialect: Dialect, reported: &str) -> Option<(ColumnType, bool)> {
+    let reported = reported.trim().to_lowercase();
+    let (reported, unsigned) = match reported.strip_suffix(" unsigned") {
+        Some(rest) => (rest.to_owned(), true),
+        None => (reported, false),
+    };
+    let args: Vec<u32> = reported
+        .split_once('(')
+        .map(|(_, args)| args)
+        .unwrap_or_default()
+        .split(|c: char| !c.is_ascii_digit())
+        .filter_map(|n| n.parse().ok())
+        .collect();
+    let arg = |i: usize| args.get(i).copied().unwrap_or(0);
+    let small = |i: usize| u8::try_from(arg(i)).unwrap_or(0);
+    // Earlier candidates win where two types share SQL on Oracle: `text` over
+    // `json` (CLOB), `string(n, 18)` over `time` (VARCHAR2(18 CHAR)).
+    let candidates = [
+        ColumnType::BigInteger,
+        ColumnType::Integer,
+        ColumnType::SmallInteger,
+        ColumnType::Boolean,
+        ColumnType::String(arg(0)),
+        ColumnType::Char(arg(0)),
+        ColumnType::Text,
+        ColumnType::LongText,
+        ColumnType::Double,
+        ColumnType::Decimal(small(0), small(1)),
+        ColumnType::Date,
+        ColumnType::DateTime,
+        ColumnType::Time,
+        ColumnType::Json,
+        ColumnType::Binary,
+    ];
+    // DDL `VARCHAR2(50 CHAR)`, `NUMBER(19)`, `DECIMAL(10, 2)` as the catalog reports them.
+    let normalize = |sql: &str| {
+        let sql = sql.to_lowercase().replace(" char)", ")").replace(' ', "");
+        match (dialect, sql.strip_prefix("number(")) {
+            (Dialect::Oracle, Some(rest)) if !rest.contains(',') => {
+                format!("number({},0)", rest.trim_end_matches(')'))
+            }
+            _ => sql,
+        }
+    };
+    let reported = normalize(&reported);
+    let ty = candidates.into_iter().find(|&ty| {
+        let sql = match dialect {
+            Dialect::MySql => mysql::column_type(ty),
+            Dialect::Oracle => oracle::column_type(ty),
+        };
+        normalize(&sql) == reported
+    })?;
+    Some((ty, unsigned))
+}
+
 fn statement(dialect: Dialect, write: impl FnOnce(&mut Writer)) -> Result<String> {
     let mut w = Writer::new(dialect);
     write(&mut w);

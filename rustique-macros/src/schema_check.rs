@@ -58,7 +58,10 @@ impl Snapshot {
             }
             match line.split('\t').collect::<Vec<_>>()[..] {
                 ["dialect", dialect] => snapshot.oracle = dialect == "oracle",
-                [table, column, nullable @ ("null" | "not null"), ty] => {
+                // Keys and the format version are for `make:migration --diff`.
+                ["version", _] | [_, _, "primary key" | "unique" | "index" | "foreign key", ..] => {
+                }
+                [table, column, nullable @ ("null" | "not null"), ty, ..] => {
                     snapshot
                         .tables
                         .entry(table.to_lowercase())
@@ -278,14 +281,18 @@ mod tests {
 
     const MYSQL: &str = "# comment\n\
         dialect\tmysql\n\
-        users\tid\tnot null\tbigint unsigned\n\
-        users\temail\tnot null\tvarchar(255)\n\
+        version\t2\n\
+        users\tid\tnot null\tbigint unsigned\t\tauto_increment\n\
+        users\temail\tnot null\tvarchar(255)\t'x'\n\
         users\tnickname\tnull\tvarchar(50)\n\
         users\tscore\tnot null\tdecimal(10,2)\n\
         users\tactive\tnot null\ttinyint(1)\n\
         users\tdata\tnull\tjson\n\
         users\tcreated_at\tnull\tdatetime(6)\n\
-        users\tpoint\tnot null\tpoint\n";
+        users\tpoint\tnot null\tpoint\n\
+        users\tprimary\tprimary key\tid\n\
+        users\tusers_email_unique\tunique\temail\n\
+        users\tusers_team_id_foreign\tforeign key\tteam_id\tteams\tid\tcascade\n";
 
     fn column(name: &str, ty: Type) -> Column {
         Column {

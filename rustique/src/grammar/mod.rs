@@ -19,7 +19,7 @@ mod writer;
 use std::fmt;
 
 pub(crate) use dml::{delete, increment, insert, insert_get_id, insert_get_ids, update, upsert};
-pub(crate) use schema::{blueprint, drop_table, has_table, rename_table};
+pub(crate) use schema::{blueprint, drop_table, has_table, parse_column_type, rename_table};
 pub(crate) use select::{aggregate, select};
 
 use crate::query::{QueryBuilder, Raw};

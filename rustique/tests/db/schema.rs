@@ -456,9 +456,11 @@ async fn fresh_drops_every_table() {
 }
 
 /// `schema:snapshot` writes the lines `#[rustique::model]` checks with the
-/// `schema-check` feature (`rustique-macros/src/schema_check.rs`).
+/// `schema-check` feature (`rustique-macros/src/schema_check.rs`), plus the
+/// defaults and keys `make:migration --diff` compares; a column dropped by
+/// hand comes back in the generated migration's `up`.
 #[tokio::test]
-async fn snapshot_lists_columns() {
+async fn snapshot_reads_back_and_diffs() {
     for var in ["RUSTIQUE_TEST_MYSQL_URL", "RUSTIQUE_TEST_ORACLE_URL"] {
         let Ok(url) = std::env::var(var) else {
             continue;
@@ -467,44 +469,94 @@ async fn snapshot_lists_columns() {
         Schema::drop_if_exists(&db, "orm_s_snapshot").await.unwrap();
         Schema::create(&db, "orm_s_snapshot", |t| {
             t.id();
-            t.string("name", 50);
+            t.string("name", 50).default("x").unique();
             t.decimal("price", 10, 2).nullable();
-            t.datetime("seen_at").nullable();
+            t.integer("votes").default(0).index();
+            t.datetime("seen_at").nullable().use_current();
+            t.foreign_id("parent_id")
+                .nullable()
+                .constrained("orm_s_snapshot")
+                .null_on_delete();
         })
         .await
         .unwrap();
-        let file =
-            std::env::temp_dir().join(format!("rustique-schema-{var}-{}.txt", std::process::id()));
+        let tag = format!("{var}-{}", std::process::id());
+        let file = std::env::temp_dir().join(format!("rustique-schema-{tag}.txt"));
         let path = file.display().to_string();
-        let args = ["schema:snapshot", "--env", var, "--path", &path].map(str::to_owned);
-        rustique::cli::run(&Migrator::new(Vec::new()), args)
-            .await
-            .unwrap();
+        let cli = |args: &[&str]| {
+            let args: Vec<String> = args.iter().map(|&a| a.to_owned()).collect();
+            async move {
+                rustique::cli::run(&Migrator::new(Vec::new()), args)
+                    .await
+                    .unwrap();
+            }
+        };
+        cli(&["schema:snapshot", "--env", var, "--path", &path]).await;
         let text = std::fs::read_to_string(&file).unwrap();
-        std::fs::remove_file(&file).unwrap();
-        Schema::drop(&db, "orm_s_snapshot").await.unwrap();
 
         let lines: Vec<&str> = text
             .lines()
             .filter(|l| l.to_lowercase().starts_with("orm_s_snapshot\t"))
             .collect();
         let expected = if var.contains("MYSQL") {
-            assert!(text.contains("\ndialect\tmysql\n"), "{text}");
+            assert!(text.contains("\ndialect\tmysql\nversion\t2\n"), "{text}");
             [
-                "orm_s_snapshot\tid\tnot null\tbigint unsigned",
-                "orm_s_snapshot\tname\tnot null\tvarchar(50)",
+                "orm_s_snapshot\tid\tnot null\tbigint unsigned\t\tauto_increment",
+                "orm_s_snapshot\tname\tnot null\tvarchar(50)\t'x'",
                 "orm_s_snapshot\tprice\tnull\tdecimal(10,2)",
-                "orm_s_snapshot\tseen_at\tnull\tdatetime(6)",
+                "orm_s_snapshot\tvotes\tnot null\tint\t0",
+                "orm_s_snapshot\tseen_at\tnull\tdatetime(6)\t(utc_timestamp(6))",
+                "orm_s_snapshot\tparent_id\tnull\tbigint unsigned",
+                "orm_s_snapshot\torm_s_snapshot_parent_id_foreign\tforeign key\tparent_id\torm_s_snapshot\tid\tset null",
+                "orm_s_snapshot\torm_s_snapshot_votes_index\tindex\tvotes",
+                "orm_s_snapshot\tprimary\tprimary key\tid",
+                "orm_s_snapshot\torm_s_snapshot_name_unique\tunique\tname",
             ]
         } else {
-            assert!(text.contains("\ndialect\toracle\n"), "{text}");
+            assert!(text.contains("\ndialect\toracle\nversion\t2\n"), "{text}");
             [
-                "ORM_S_SNAPSHOT\tID\tnot null\tNUMBER(19,0)",
-                "ORM_S_SNAPSHOT\tNAME\tnot null\tVARCHAR2(50)",
+                "ORM_S_SNAPSHOT\tID\tnot null\tNUMBER(19,0)\t\tauto_increment",
+                "ORM_S_SNAPSHOT\tNAME\tnot null\tVARCHAR2(50)\t'x'",
                 "ORM_S_SNAPSHOT\tPRICE\tnull\tNUMBER(10,2)",
-                "ORM_S_SNAPSHOT\tSEEN_AT\tnull\tTIMESTAMP(6)",
+                "ORM_S_SNAPSHOT\tVOTES\tnot null\tNUMBER(10,0)\t0",
+                "ORM_S_SNAPSHOT\tSEEN_AT\tnull\tTIMESTAMP(6)\tSYS_EXTRACT_UTC(SYSTIMESTAMP)",
+                "ORM_S_SNAPSHOT\tPARENT_ID\tnull\tNUMBER(19,0)",
+                "ORM_S_SNAPSHOT\tORM_S_SNAPSHOT_PARENT_ID_FOREIGN\tforeign key\tPARENT_ID\tORM_S_SNAPSHOT\tID\tset null",
+                "ORM_S_SNAPSHOT\tORM_S_SNAPSHOT_VOTES_INDEX\tindex\tVOTES",
+                "ORM_S_SNAPSHOT\tprimary\tprimary key\tID",
+                "ORM_S_SNAPSHOT\tORM_S_SNAPSHOT_NAME_UNIQUE\tunique\tNAME",
             ]
         };
         assert_eq!(lines, expected, "{var}");
+
+        // Drop a column by hand: the migration from the database to the snapshot re-adds it.
+        db.statement("ALTER TABLE orm_s_snapshot DROP COLUMN price", [])
+            .await
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!("rustique-diff-{tag}"));
+        let dir_path = dir.display().to_string();
+        let make = [
+            "make:migration",
+            "restore_price",
+            "--diff",
+            "--snapshot",
+            &path,
+            "--path",
+            &dir_path,
+            "--env",
+            var,
+        ];
+        cli(&make).await;
+        let migration = std::fs::read_dir(&dir).unwrap().next().unwrap().unwrap();
+        let source = std::fs::read_to_string(migration.path()).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        Schema::drop(&db, "orm_s_snapshot").await.unwrap();
+
+        let (up, down) = source.split_once("pub async fn down").unwrap();
+        let restore = "    Schema::table(db, \"orm_s_snapshot\", |t| {\n        \
+                       t.decimal(\"price\", 10, 2).nullable();\n    })\n";
+        assert!(up.contains(restore), "{source}");
+        assert!(down.contains("t.drop_column(\"price\");"), "{source}");
     }
 }

@@ -109,8 +109,6 @@ t.drop_foreign("posts_user_id_foreign");
 
 Default names follow Laravel: `{table}_{columns}_{unique|index|foreign}`.
 
-Not supported yet: `time` columns (Oracle has no `TIME`), generating migrations from a schema diff.
-
 ## Migrations
 
 A migration is a module with `up` and `down`. Its name is the module name; migrations run in listed order.
@@ -224,6 +222,7 @@ cargo run --bin rustique -- migrate
 | `migrate:status` | list migrations and their batch |
 | `db:seed` | run the seeder |
 | `make:migration <name> [--path dir]` | write a migration file (default `src/migrations`). A `create_<table>_table` name gets a `Schema::create` skeleton |
+| `make:migration <name> --diff [--snapshot file]` | write a migration from the database to the schema snapshot ([migrations from a schema diff](#migrations-from-a-schema-diff)) |
 | `schema:snapshot [--path file]` | write the schema snapshot for the [compile-time model check](#compile-time-schema-check) (default `rustique-schema.txt`) |
 
 The database URL comes from `$DATABASE_URL`, or the variable named by `--env VAR`. Never a command-line argument, where `ps` and shell history would show the password.
@@ -244,7 +243,7 @@ rustique-orm = { version = "0.1", features = ["schema-check"] }
 cargo run --bin rustique -- schema:snapshot
 ```
 
-`schema:snapshot` writes `rustique-schema.txt` with one line per column (table, column, `null` / `not null`, type). Run it from the directory of the crate that defines the models: the macro reads `rustique-schema.txt` next to that crate's `Cargo.toml`. Run it again after each migration; cargo rebuilds the models when the file changes.
+`schema:snapshot` writes `rustique-schema.txt` with one line per column (table, column, `null` / `not null`, type, then the default and `auto_increment` when there are any) and one per primary key, index and foreign key, which [`make:migration --diff`](#migrations-from-a-schema-diff) uses. Run it from the directory of the crate that defines the models: the macro reads `rustique-schema.txt` next to that crate's `Cargo.toml`. Run it again after each migration; cargo rebuilds the models when the file changes.
 
 Each model gets a compile error at the field for:
 
@@ -255,3 +254,62 @@ Each model gets a compile error at the field for:
 The check is skipped without the feature or without the file, so a fresh clone builds as before. Field types the check does not know, such as `#[derive(rustique::Cast)]` types and `rustique::Value`, are only checked for existence. Tables named `schema.table` are not checked. The check only covers model fields: column names in query-builder calls and raw SQL are still checked at runtime.
 
 To fail CI on a stale snapshot, migrate a database, run `schema:snapshot` and check that `git diff --exit-code rustique-schema.txt` passes.
+
+## Migrations from a schema diff
+
+`make:migration <name> --diff` writes a migration from the live database to the schema in the snapshot file (`--snapshot file`, default `rustique-schema.txt`):
+
+- the **snapshot is the desired schema**, the **database is the current one**;
+- `up` turns the database into the snapshot, `down` turns it back into what the database is now;
+- when they match it prints `No changes: ...` and writes nothing.
+
+The desired schema is the snapshot rather than the models because a model only knows its column names, not their SQL types, lengths, defaults or indexes. So the workflow is: run `schema:snapshot` on a migrated database, commit the file, edit it to the schema you want, then run `make:migration add_handle_to_users --diff` against that database and review the result. Lines are tab-separated:
+
+```text
+users	id	not null	bigint unsigned		auto_increment
+users	handle	not null	varchar(255)	'anonymous'
+users	primary	primary key	id
+users	users_handle_unique	unique	handle
+posts	posts_user_id_foreign	foreign key	user_id	users	id	cascade
+```
+
+The fields are: a column's table, name, `null` / `not null`, type as the database reports it (`varchar(255)`, `VARCHAR2(255)`, `NUMBER(19,0)`), default as SQL, `auto_increment` or `use_current_on_update`; a key's table, name (`primary` for primary keys), `primary key` / `unique` / `index` / `foreign key`, comma-separated columns, and for foreign keys the referenced table, its columns and `cascade` / `set null` / `restrict`.
+
+The generated migration uses the schema builder:
+
+```rust
+use rustique::{Db, Schema};
+
+pub async fn up(db: &Db) -> rustique::Result<()> {
+    Schema::create(db, "posts", |t| {
+        t.big_increments("id");
+        t.big_integer("user_id").unsigned();
+        t.text("body").nullable();
+    })
+    .await?;
+    Schema::table(db, "users", |t| {
+        t.drop_index("users_email_unique");
+        t.drop_column("name");
+        t.string("email", 320).nullable().change();
+        // TODO: rename? `t.rename_column("name", "handle");` would keep the data.
+        t.string("handle", 255).default_raw("'anonymous'");
+    })
+    .await?;
+    Schema::table(db, "posts", |t| {
+        t.foreign(&["user_id"], "users", &["id"]).name("posts_user_id_foreign").cascade_on_delete();
+    })
+    .await?;
+    Ok(())
+}
+# pub async fn down(_: &Db) -> rustique::Result<()> { Ok(()) }
+```
+
+It covers new and dropped tables, added, dropped and changed columns (type, nullability, default), and added and dropped indexes, unique indexes and foreign keys. New tables get their foreign keys in a second step, so tables may reference each other; dropped tables lose theirs first. Defaults are copied as SQL (`default_raw`).
+
+Review the file before running it:
+
+- A renamed column comes out as a drop plus an add, with a `// TODO: rename?` comment when a dropped column has the same type; use `rename_column` instead to keep the data.
+- Types no `Blueprint` method declares (`mediumint`, `enum(...)`, `NUMBER(*,0)`, ...), dropping a primary key and changing an auto-increment column become `// TODO` comments.
+- Where two `Blueprint` types share SQL, the first one wins: on Oracle `json` (with its `IS JSON` check) and `long_text` come back as `text`, and `time` as `string(name, 18)`; on both a `uuid` comes back as `char(name, 36)`.
+- Check constraints, column and table comments, views and Oracle sequences are not compared; a view that is only in the database is dropped like a table.
+- Snapshots written before `make:migration --diff` existed lack defaults and keys and are refused; write them again with `schema:snapshot`.
