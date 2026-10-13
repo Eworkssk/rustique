@@ -301,7 +301,7 @@ To fail CI on a stale snapshot, migrate a database, run `schema:snapshot` and ch
 
 - the **snapshot is the desired schema**, the **database is the current one**;
 - `up` turns the database into the snapshot, `down` turns it back into what the database is now;
-- when they match it prints `No changes: ...` and writes nothing.
+- when they match it prints `No changes: ...` and writes nothing. A migration of only `// TODO` comments is still written, so you see them.
 
 The desired schema is the snapshot rather than the models because a model only knows its column names, not their SQL types, lengths, defaults or indexes. So the workflow is: run `schema:snapshot` on a migrated database, commit the file, edit it to the schema you want, then run `make:migration add_handle_to_users --diff` against that database and review the result. Lines are tab-separated:
 
@@ -344,12 +344,13 @@ pub async fn up(db: &Db) -> rustique::Result<()> {
 # pub async fn down(_: &Db) -> rustique::Result<()> { Ok(()) }
 ```
 
-It covers new and dropped tables, added, dropped and changed columns (type, nullability, default), and added and dropped indexes, unique indexes and foreign keys. New tables get their foreign keys in a second step, so tables may reference each other; dropped tables lose theirs first. Defaults are copied as SQL (`default_raw`).
+It covers new tables (see below for tables missing from the snapshot), added, dropped and changed columns (type, nullability, default), and added and dropped indexes, unique indexes and foreign keys. New tables get their foreign keys in a second step, so tables may reference each other; tables the migration created are dropped in `down`, after losing their foreign keys. Defaults are copied as SQL (`default_raw`).
 
 Review the file before running it:
 
+- A table that is in the database but not in the snapshot is never dropped: `up` gets a `// TODO: "name" exists in the database but not in the snapshot. Drop it? Schema::drop(db, "name").await?;` comment and nothing else (its foreign keys stay too), `down` nothing. Uncomment the drop if you mean it, and write its `down` yourself.
 - A renamed column comes out as a drop plus an add, with a `// TODO: rename?` comment when a dropped column has the same type; use `rename_column` instead to keep the data.
 - Types no `Blueprint` method declares (`mediumint`, `enum(...)`, `NUMBER(*,0)`, ...), dropping a primary key and changing an auto-increment column become `// TODO` comments.
 - Where two `Blueprint` types share SQL, the first one wins: on Oracle `json` (with its `IS JSON` check) and `long_text` come back as `text`, and `time` as `string(name, 18)`; on both a `uuid` comes back as `char(name, 36)`.
-- Check constraints, column and table comments, views and Oracle sequences are not compared; a view that is only in the database is dropped like a table.
+- Check constraints, column and table comments, views and Oracle sequences are not compared; `schema:snapshot` lists base tables only.
 - Snapshots written before `make:migration --diff` existed lack defaults and keys and are refused; write them again with `schema:snapshot`.

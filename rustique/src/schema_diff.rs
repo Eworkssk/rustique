@@ -141,11 +141,12 @@ pub(crate) fn migration(desired: &str, live: &str, file: &str) -> Result<Option<
             desired.dialect, live.dialect
         )));
     }
-    let up = changes(&desired, &live);
+    // A diff of only TODO comments still counts as a change, so the user sees it.
+    let up = changes(&desired, &live, true);
     if up.is_empty() {
         return Ok(None);
     }
-    let down = changes(&live, &desired);
+    let down = changes(&live, &desired, false);
     Ok(Some(format!(
         "use rustique::{{Db, Schema}};
 
@@ -164,8 +165,10 @@ pub async fn down(db: &Db) -> rustique::Result<()> {{
 
 /// The statements of `up` (or, swapped, `down`): create tables without their
 /// foreign keys, which may point at each other; change tables, adding those
-/// foreign keys; drop tables, after removing their foreign keys.
-fn changes(desired: &Snapshot, actual: &Snapshot) -> String {
+/// foreign keys; drop tables, after removing their foreign keys. A table only
+/// in the database (`actual` in `up`, `desired` in `down`) is never dropped:
+/// `up` gets a TODO comment for it, `down` nothing.
+fn changes(desired: &Snapshot, actual: &Snapshot, up: bool) -> String {
     let dialect = desired.dialect;
     let without_foreign = |t: &Table| Table {
         keys: t
@@ -176,6 +179,14 @@ fn changes(desired: &Snapshot, actual: &Snapshot) -> String {
             .collect(),
         ..t.clone()
     };
+    let db_only = |name: &String| {
+        let (live, file) = if up {
+            (actual, desired)
+        } else {
+            (desired, actual)
+        };
+        live.tables.contains_key(name) && !file.tables.contains_key(name)
+    };
     let mut out = String::new();
     let mut call = |head: String, lines: Vec<String>| {
         out.push_str(&format!("    {head}, |t| {{\n"));
@@ -185,13 +196,13 @@ fn changes(desired: &Snapshot, actual: &Snapshot) -> String {
         out.push_str("    })\n    .await?;\n");
     };
     for (name, table) in &desired.tables {
-        if !actual.tables.contains_key(name) {
+        if !actual.tables.contains_key(name) && !db_only(name) {
             let lines = body(dialect, &without_foreign(table), &Table::default());
             call(format!("Schema::create(db, {name:?}"), lines);
         }
     }
     let names: BTreeSet<&String> = desired.tables.keys().chain(actual.tables.keys()).collect();
-    for name in names {
+    for name in names.into_iter().filter(|n| !db_only(n)) {
         let (d, a) = match (desired.tables.get(name), actual.tables.get(name)) {
             (Some(d), Some(a)) => (d.clone(), a.clone()),
             (Some(d), None) => (d.clone(), without_foreign(d)),
@@ -204,8 +215,12 @@ fn changes(desired: &Snapshot, actual: &Snapshot) -> String {
         }
     }
     for name in actual.tables.keys() {
-        if !desired.tables.contains_key(name) {
-            // shortcut: views are listed like tables; one only in the database gets dropped here.
+        if db_only(name) {
+            out.push_str(&format!(
+                "    // TODO: {name:?} exists in the database but not in the snapshot. \
+                 Drop it? Schema::drop(db, {name:?}).await?;\n"
+            ));
+        } else if !desired.tables.contains_key(name) {
             out.push_str(&format!("    Schema::drop(db, {name:?}).await?;\n"));
         }
     }
@@ -398,6 +413,14 @@ mod tests {
     Schema::drop(db, "posts").await?;
     Ok(())"#;
         assert!(down.contains(drop), "{down}");
+        // A table only in the database is never dropped, nor its foreign keys.
+        let source = diff(USERS, &format!("{USERS}{posts}")).unwrap();
+        let (up, down) = source.split_once("pub async fn down").unwrap();
+        let todo = r#"    // TODO: "posts" exists in the database but not in the snapshot. Drop it? Schema::drop(db, "posts").await?;
+    Ok(())"#;
+        assert!(up.contains(todo), "{up}");
+        assert!(!up.contains("Schema::table"), "{up}");
+        assert!(!down.contains("Schema::"), "{down}");
     }
 
     #[test]
