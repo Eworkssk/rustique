@@ -72,7 +72,7 @@ Checked against the code on 2026-10-11, after the parity pass that closed the ga
 | change column | `change()` | Have |
 | migrate, rollback, rollback --step, reset, fresh, status | `Migrator` and the CLI | Have; no `squash` |
 | migration lock against concurrent runs | `GET_LOCK` / lock table | Have |
-| useCurrent, raw defaults, column and table comments | `use_current`, `default_raw`, `comment` | Have; no `useCurrentOnUpdate` |
+| useCurrent, raw defaults, column and table comments | `use_current`, `default_raw`, `comment` | Have; `use_current_on_update` acts on MySQL only |
 | time columns | none (Oracle has no `TIME`) | Missing |
 
 ## Other

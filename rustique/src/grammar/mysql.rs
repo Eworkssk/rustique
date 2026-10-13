@@ -101,6 +101,7 @@ pub(super) fn column_type(ty: ColumnType) -> String {
         ColumnType::Decimal(precision, scale) => format!("DECIMAL({precision}, {scale})"),
         ColumnType::Date => "DATE".to_owned(),
         ColumnType::DateTime => "DATETIME(6)".to_owned(),
+        ColumnType::Time => "TIME(6)".to_owned(),
         ColumnType::Json => "JSON".to_owned(),
         ColumnType::Binary => "LONGBLOB".to_owned(),
         ColumnType::Uuid => "CHAR(36)".to_owned(),

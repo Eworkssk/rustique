@@ -380,6 +380,12 @@ impl Blueprint {
         self.add(name, ColumnType::DateTime)
     }
 
+    /// `TIME(6)` / `VARCHAR2(18 CHAR)`: Oracle has no time-of-day type, so
+    /// times are stored as `HH:MM:SS[.f]` text and read back as `NaiveTime`.
+    pub fn time(&mut self, name: &str) -> &mut Column {
+        self.add(name, ColumnType::Time)
+    }
+
     /// `JSON` / `CLOB` with `CHECK (name IS JSON)`.
     pub fn json(&mut self, name: &str) -> &mut Column {
         self.add(name, ColumnType::Json)
@@ -491,6 +497,7 @@ pub struct Column {
     pub(crate) nullable: bool,
     pub(crate) default: Option<Value>,
     pub(crate) default_expr: Option<DefaultExpr>,
+    pub(crate) on_update_current: bool,
     pub(crate) comment: Option<String>,
     pub(crate) unsigned: bool,
     pub(crate) auto_increment: bool,
@@ -510,6 +517,7 @@ impl Column {
             nullable: false,
             default: None,
             default_expr: None,
+            on_update_current: false,
             comment: None,
             unsigned: false,
             auto_increment: false,
@@ -570,6 +578,16 @@ impl Column {
     pub fn use_current(&mut self) -> &mut Self {
         self.default_expr = Some(DefaultExpr::Current);
         self.default = None;
+        self
+    }
+
+    /// Refreshes a [`datetime`](Blueprint::datetime) column to the current
+    /// time on every `UPDATE`, like Laravel's `useCurrentOnUpdate`: MySQL
+    /// `ON UPDATE CURRENT_TIMESTAMP(6)` (session time zone). Oracle has no
+    /// such clause and ignores it; models with `timestamps` set `updated_at`
+    /// themselves.
+    pub fn use_current_on_update(&mut self) -> &mut Self {
+        self.on_update_current = true;
         self
     }
 
@@ -684,6 +702,7 @@ pub(crate) enum ColumnType {
     Decimal(u8, u8),
     Date,
     DateTime,
+    Time,
     Json,
     Binary,
     Uuid,

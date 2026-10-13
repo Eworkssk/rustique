@@ -46,6 +46,7 @@ Schema::has_column(&db, "users", "email").await?;  // bool
 | `double(n)` | `DOUBLE` | `BINARY_DOUBLE` |
 | `decimal(n, p, s)` | `DECIMAL(p, s)` | `NUMBER(p, s)` |
 | `date(n)`, `datetime(n)` | `DATE`, `DATETIME(6)` | `DATE`, `TIMESTAMP(6)` |
+| `time(n)` | `TIME(6)` | `VARCHAR2(18 CHAR)`: no time type, so `HH:MM:SS[.f]` text, read back as `NaiveTime` |
 | `json(n)` | `JSON` | `CLOB` + `CHECK (n IS JSON)` |
 | `binary(n)` | `LONGBLOB` | `BLOB` |
 | `uuid(n)` | `CHAR(36)` | `CHAR(36)` |
@@ -57,7 +58,7 @@ Run `Blueprint::create("t").to_sql(Dialect::MySql)` to see the exact DDL.
 
 ### Column modifiers
 
-`nullable()`, `default(value)`, `default_raw("sql")`, `use_current()`, `comment("text")`, `unsigned()`, `primary()`, `unique()`, `index()`, `constrained("table")`, `cascade_on_delete()`, `null_on_delete()`, `change()`.
+`nullable()`, `default(value)`, `default_raw("sql")`, `use_current()`, `use_current_on_update()`, `comment("text")`, `unsigned()`, `primary()`, `unique()`, `index()`, `constrained("table")`, `cascade_on_delete()`, `null_on_delete()`, `change()`.
 
 ```rust
 # async fn run(db: rustique::Db) -> rustique::Result<()> {
@@ -71,7 +72,8 @@ rustique::Schema::create(&db, "events", |t| {
 # }
 ```
 
-- `use_current()` works on `datetime` and `date` columns: MySQL `(UTC_TIMESTAMP(6))` / `(UTC_DATE())`, Oracle `SYS_EXTRACT_UTC(SYSTIMESTAMP)` (truncated for dates). Laravel's `CURRENT_TIMESTAMP` would follow the session time zone instead. There is no `use_current_on_update`: Oracle has no `ON UPDATE`; models with `timestamps` set `updated_at` themselves.
+- `use_current()` works on `datetime` and `date` columns: MySQL `(UTC_TIMESTAMP(6))` / `(UTC_DATE())`, Oracle `SYS_EXTRACT_UTC(SYSTIMESTAMP)` (truncated for dates). Laravel's `CURRENT_TIMESTAMP` would follow the session time zone instead.
+- `use_current_on_update()` works on `datetime` columns: MySQL `ON UPDATE CURRENT_TIMESTAMP(6)` (session time zone). Oracle has no `ON UPDATE`, so it is ignored there; models with `timestamps` set `updated_at` themselves.
 - `default_raw` is not portable; write it per database if they differ.
 - Comments: MySQL writes them into the column definition and `ALTER TABLE ... COMMENT`, Oracle runs `COMMENT ON COLUMN` / `COMMENT ON TABLE`.
 

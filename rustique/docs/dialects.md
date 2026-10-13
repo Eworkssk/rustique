@@ -15,7 +15,8 @@ You write one query; the grammar compiles it per database. Things you can see fr
 | `shared_lock()` | `FOR SHARE` | `Error::Unsupported` |
 | `lock_for_update()` with `limit` / `first` | `LIMIT 1 FOR UPDATE` | `WHERE ROWID IN (SELECT ROWID ... FETCH NEXT 1 ROWS ONLY) FOR UPDATE` (ORA-02014 otherwise); `Error::Unsupported` with joins, grouping or `skip_locked` |
 | Ordered union | `(...) UNION (...) ORDER BY x` | `SELECT * FROM ((...) UNION (...)) ORDER BY x` (ORA-00904 otherwise) |
-| `TIME` column | `TIME` (outside a day, such as `25:00:00`, read as text) | none: write times into `VARCHAR2`, they read back as `NaiveTime` |
+| `TIME` column | `TIME` (outside a day, such as `25:00:00`, read as text) | none: `time()` creates `VARCHAR2(18 CHAR)`; times are stored as text and read back as `NaiveTime` |
+| `use_current_on_update()` | `ON UPDATE CURRENT_TIMESTAMP(6)` | ignored (no `ON UPDATE`; the model sets the column) |
 | Zero dates `0000-00-00` | read as `NULL` | n/a |
 | JSON column | `JSON` | `CLOB` with `IS JSON` check |
 | DDL in a transaction | auto-commits | auto-commits |

@@ -243,3 +243,23 @@ fn current_time_raw_defaults_and_comments() {
     let error = bad.to_sql(Dialect::MySql).unwrap_err().to_string();
     assert!(error.contains("use_current"), "{error}");
 }
+
+#[test]
+fn time_columns_and_use_current_on_update() {
+    let mut t = Blueprint::create("shifts");
+    t.time("starts").nullable();
+    t.datetime("touched").use_current().use_current_on_update();
+    assert_ddl(
+        &t,
+        &["CREATE TABLE `shifts` (`starts` TIME(6), \
+           `touched` DATETIME(6) DEFAULT (UTC_TIMESTAMP(6)) ON UPDATE CURRENT_TIMESTAMP(6) NOT NULL)"],
+        &[
+            r#"CREATE TABLE "SHIFTS" ("STARTS" VARCHAR2(18 CHAR), "TOUCHED" TIMESTAMP(6) DEFAULT SYS_EXTRACT_UTC(SYSTIMESTAMP) NOT NULL)"#,
+        ],
+    );
+
+    let mut bad = Blueprint::create("shifts");
+    bad.string("name", 10).use_current_on_update();
+    let error = bad.to_sql(Dialect::MySql).unwrap_err().to_string();
+    assert!(error.contains("use_current_on_update"), "{error}");
+}
