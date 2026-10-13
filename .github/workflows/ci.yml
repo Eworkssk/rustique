@@ -85,6 +85,9 @@ jobs:
           curl -fsSL -o ic.zip https://download.oracle.com/otn_software/linux/instantclient/instantclient-basiclite-linuxx64.zip
           mkdir "$RUNNER_TEMP/ic" && unzip -q ic.zip -d "$RUNNER_TEMP/ic"
           echo "LD_LIBRARY_PATH=$(dirname "$(find "$RUNNER_TEMP/ic" -name libclntsh.so | head -1)")" >> "$GITHUB_ENV"
+          # The 23.x client's out-of-band breaks fail through Docker NAT with ORA-12637.
+          echo "DISABLE_OOB=ON" > "$RUNNER_TEMP/ic/sqlnet.ora"
+          echo "TNS_ADMIN=$RUNNER_TEMP/ic" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Wait for the database (first start creates it, 5-15 min)
