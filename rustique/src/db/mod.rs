@@ -19,7 +19,7 @@ mod transaction;
 
 use std::fmt;
 use std::future::Future;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 pub use cursor::Cursor;
@@ -310,6 +310,13 @@ pub struct Db {
     read: Arc<[Pool]>,
     /// Round-robin position over `read`, shared by clones.
     next_read: Arc<AtomicUsize>,
+    /// See [`DbBuilder::sticky`].
+    sticky: bool,
+}
+
+tokio::task_local! {
+    /// Whether a sticky [`Db`] wrote inside the current [`Db::sticky_scope`].
+    static WROTE: Arc<AtomicBool>;
 }
 
 #[derive(Clone)]
@@ -367,8 +374,19 @@ impl Db {
     }
 
     /// A pool for `url` that has not connected yet.
-    fn open(url: &str, config: options::PoolConfig) -> Result<Self> {
+    fn open(url: &str, mut config: options::PoolConfig) -> Result<Self> {
         let scheme = url.split_once("://").map_or("", |(scheme, _)| scheme);
+        if let Some(zone) = &config.timezone {
+            // Inlined into SQL: session setup takes no bindings.
+            if zone.contains(['\'', '\\']) {
+                return Err(Error::Config(format!("invalid time zone `{zone}`")));
+            }
+            let sql = match scheme {
+                "oracle" => format!("ALTER SESSION SET TIME_ZONE = '{zone}'"),
+                _ => format!("SET time_zone = '{zone}'"),
+            };
+            config.session_setup.insert(0, sql);
+        }
         let pool = match scheme {
             #[cfg(feature = "mysql")]
             "mysql" => Pool::MySql(mysql::pool(url, config)?),
@@ -385,7 +403,28 @@ impl Db {
             pool,
             read: Arc::new([]),
             next_read: Arc::new(AtomicUsize::new(0)),
+            sticky: false,
         })
+    }
+
+    /// Runs `f` as one sticky scope, such as a web request, like Laravel's
+    /// `sticky` option for a request: once a [sticky](DbBuilder::sticky)
+    /// `Db` writes inside it, its plain reads go to the primary until the
+    /// scope ends, so they see that write. Outside a scope, `sticky` has no
+    /// effect. A nested scope shares the outer one's state.
+    // shortcut: the flag is task-local, so tasks spawned inside the scope do
+    // not share it, and one write pins reads of every sticky `Db` in the
+    // scope; wrap spawned work in its own scope if it must stick too.
+    pub async fn sticky_scope<F: Future>(f: F) -> F::Output {
+        let wrote = WROTE.try_with(Arc::clone).unwrap_or_default();
+        WROTE.scope(wrote, f).await
+    }
+
+    /// Marks the current sticky scope as written, for a sticky `Db`.
+    fn wrote(&self) {
+        if self.sticky {
+            let _ = WROTE.try_with(|wrote| wrote.store(true, Ordering::Relaxed));
+        }
     }
 
     /// This pool without its read replicas: every query on the main
@@ -402,7 +441,11 @@ impl Db {
 
     /// The pool a query runs on: a replica for plain reads, if there are any.
     fn pool_for(&self, query: &Compiled) -> &Pool {
-        if self.read.is_empty() || !is_plain_read(query) {
+        let stuck = self.sticky
+            && WROTE
+                .try_with(|w| w.load(Ordering::Relaxed))
+                .unwrap_or(false);
+        if self.read.is_empty() || stuck || !is_plain_read(query) {
             return &self.pool;
         }
         let next = self.next_read.fetch_add(1, Ordering::Relaxed);
@@ -433,6 +476,7 @@ impl Db {
 
     /// [`Executor::execute`]; `raw` as for [`fetch_from`](Self::fetch_from).
     async fn execute_raw(&self, query: Compiled, raw: bool) -> Result<Executed> {
+        self.wrote();
         log::logged(self.dialect(), query, |query| async move {
             match &self.pool {
                 #[cfg(feature = "mysql")]
@@ -495,6 +539,7 @@ impl Db {
     ///
     /// [`Error::Database`] when no connection is available or `BEGIN` fails.
     pub async fn begin(&self) -> Result<Transaction> {
+        self.wrote(); // a transaction may write
         let conn = match &self.pool {
             #[cfg(feature = "mysql")]
             Pool::MySql(pool) => transaction::Conn::MySql(mysql::begin(pool).await?),

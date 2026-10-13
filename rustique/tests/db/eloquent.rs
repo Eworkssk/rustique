@@ -446,7 +446,7 @@ async fn polymorphic_many_to_many(db: &Db) {
 }
 
 /// Which pooled session a statement ran on.
-async fn session(db: &impl Executor) -> String {
+pub(crate) async fn session(db: &impl Executor) -> String {
     let sql = match db.dialect() {
         Dialect::MySql => "SELECT CAST(CONNECTION_ID() AS CHAR) AS s",
         _ => "SELECT SYS_CONTEXT('USERENV', 'SID') AS s FROM dual",
