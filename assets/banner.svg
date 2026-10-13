@@ -1,18 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 240" width="900" height="240" role="img" aria-label="Rustique: an Eloquent-style ORM for Rust">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 240" width="900" height="240" role="img" aria-label="Rustique: Eloquent-style ORM for Rust">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2E1D14"/><stop offset="1" stop-color="#150D09"/></linearGradient>
-    <linearGradient id="cu" gradientUnits="userSpaceOnUse" x1="0" y1="47" x2="0" y2="207"><stop offset="0" stop-color="#FFB27A"/><stop offset=".7" stop-color="#E2672A"/><stop offset=".72" stop-color="#2DD4BF"/><stop offset="1" stop-color="#14B8A6"/></linearGradient>
-    <mask id="rows" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256"><g fill="#fff"><rect x='0' y='47' width='256' height='13' rx='6.5'/><rect x='0' y='68' width='256' height='13' rx='6.5'/><rect x='0' y='89' width='256' height='13' rx='6.5'/><rect x='0' y='110' width='256' height='13' rx='6.5'/><rect x='0' y='131' width='256' height='13' rx='6.5'/><rect x='0' y='152' width='256' height='13' rx='6.5'/><rect x='0' y='173' width='256' height='13' rx='6.5'/><rect x='0' y='194' width='256' height='13' rx='6.5'/></g></mask>
-    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#F28C4B"/>
-      <stop offset="1" stop-color="#C2410C"/>
-    </linearGradient>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M24 0H0V24" fill="none" stroke="#E3E8EE" stroke-width="1"/>
+    </pattern>
   </defs>
-  <g transform="translate(16 8) scale(0.88)">
-    <rect x="12" y="12" width="232" height="232" rx="64" fill="url(#bg)"/>
-  <g mask="url(#rows)"><path d="M92 212 V62 H136 a37 37 0 0 1 0 74 H92 M137 136 L180 212" fill="none" stroke="url(#cu)" stroke-width="32" stroke-linejoin="round"/></g>
+  <rect width="900" height="240" fill="#F3F5F7"/>
+  <rect width="900" height="240" fill="url(#grid)"/>
+  <rect x="0.5" y="0.5" width="899" height="239" fill="none" stroke="#10161F"/>
+  <!-- byte offsets, as on the landing page -->
+  <g font-family="'Martian Mono', ui-monospace, Menlo, Consolas, monospace" font-size="12" fill="#5B6676">
+    <path d="M48.5 36v14M168.5 36v14M288.5 36v14M408.5 36v14" stroke="#10161F"/>
+    <text x="54" y="46">0x00</text><text x="174" y="46">0x08</text><text x="294" y="46">0x10</text><text x="414" y="46">0x18</text>
   </g>
-  <text x="262" y="132" font-family="'Inter','Segoe UI',system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif" font-size="100" font-weight="800" letter-spacing="-3" fill="url(#word)">rustique</text>
-  <text x="266" y="174" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="26" fill="#8B949E">Eloquent-style ORM for Rust</text>
-  <text x="266" y="208" font-family="system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="18" fill="#2DD4BF">MySQL 8.4+  ·  Oracle 19c+  ·  async on tokio</text>
+  <!-- logo: struct layout bars -->
+  <g transform="translate(48 70)">
+    <rect x="0.5" y="0.5" width="131" height="51" fill="#F3F5F7" stroke="#10161F"/>
+    <rect x="1" y="1" width="15" height="50" fill="#FF7448"/>
+    <rect x="16" y="1" width="42" height="50" fill="#8DA2FF"/>
+    <rect x="58" y="1" width="24" height="50" fill="#FFC53D"/>
+    <rect x="82" y="1" width="49" height="50" fill="#38D39F"/>
+    <path d="M16 1v50M58 1v50M82 1v50" stroke="#10161F"/>
+  </g>
+  <text x="204" y="112" font-family="'Martian Mono', ui-monospace, Menlo, Consolas, monospace" font-size="52" font-weight="700" fill="#10161F" letter-spacing="-1">rustique</text>
+  <text x="48" y="170" font-family="'Martian Mono', ui-monospace, Menlo, Consolas, monospace" font-size="24" font-weight="700" fill="#10161F">Eloquent models, laid out as Rust structs.</text>
+  <text x="48" y="206" font-family="'Martian Mono', ui-monospace, Menlo, Consolas, monospace" font-size="13" fill="#5B6676">MySQL 8.4 · Oracle 19c · async on tokio · Rust 1.88+ · unsafe forbidden</text>
 </svg>
