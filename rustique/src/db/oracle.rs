@@ -407,12 +407,13 @@ impl Drop for CancelOnDrop {
             let call = Arc::clone(&self.0);
             // A network round trip, so not on this async thread.
             in_background(move || {
-                let _state = call.state();
-                // shortcut: the call may end just before the break arrives; a
-                // pooled session is then discarded (see `Call::run`), but a
-                // transaction's next statement could see ORA-01013. Close the
-                // gap if that shows up in practice.
-                let _ = conn.break_execution();
+                let state = call.state();
+                // `Call::run` sets Idle under this lock before the connection is
+                // used again, so a break sent while Cancelled can only hit this
+                // call or an idle connection (harmless), never the next statement.
+                if matches!(*state, CallState::Cancelled) {
+                    let _ = conn.break_execution();
+                }
             });
         }
     }

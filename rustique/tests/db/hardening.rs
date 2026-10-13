@@ -304,6 +304,35 @@ async fn oracle_timeout_cancels_the_query_on_the_server() {
 }
 
 #[tokio::test]
+async fn oracle_late_break_never_reaches_the_next_statement() {
+    let Ok(url) = std::env::var("RUSTIQUE_TEST_ORACLE_URL") else {
+        return;
+    };
+    let db = rustique::Db::builder(&url)
+        .max_connections(1)
+        .connect()
+        .await
+        .unwrap();
+    let slow = "SELECT COUNT(*) AS c FROM (SELECT LEVEL FROM dual CONNECT BY LEVEL <= 300000)";
+    // Not instant, so a late break has a statement in flight to hit.
+    let next = "SELECT COUNT(*) AS c FROM (SELECT LEVEL FROM dual CONNECT BY LEVEL <= 30000)";
+    let tx = db.begin().await.unwrap();
+    let started = std::time::Instant::now();
+    tx.select(slow, []).await.unwrap();
+    let took = started.elapsed();
+
+    // Timeouts spread around the call's end, where the break races its return.
+    for i in 0..60u32 {
+        let timeout = took * (40 + i * 2) / 100;
+        let _ = tokio::time::timeout(timeout, tx.select(slow, [])).await;
+        if let Err(e) = tx.select(next, []).await {
+            panic!("after a {timeout:?} timeout (call takes {took:?}): {e}");
+        }
+    }
+    tx.commit().await.unwrap();
+}
+
+#[tokio::test]
 async fn many_queries_share_a_small_pool() {
     for var in ["RUSTIQUE_TEST_MYSQL_URL", "RUSTIQUE_TEST_ORACLE_URL"] {
         let Ok(url) = std::env::var(var) else {
