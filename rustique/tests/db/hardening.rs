@@ -333,6 +333,39 @@ async fn oracle_late_break_never_reaches_the_next_statement() {
 }
 
 #[tokio::test]
+async fn mysql_timeout_kills_the_query_on_the_server() {
+    let Ok(url) = std::env::var("RUSTIQUE_TEST_MYSQL_URL") else {
+        return;
+    };
+    let db = rustique::Db::builder(&url)
+        .max_connections(1)
+        .connect()
+        .await
+        .unwrap();
+    let slow = "SELECT SLEEP(5) AS s, 'orm-kill-on-drop' AS marker";
+    let timed_out = tokio::time::timeout(Duration::from_millis(200), db.select(slow, [])).await;
+    assert!(timed_out.is_err());
+
+    let watcher = rustique::Db::connect(&url).await.unwrap();
+    let running = "SELECT COUNT(*) AS n FROM information_schema.processlist \
+                   WHERE info LIKE '%orm-kill-on-drop%' AND info NOT LIKE '%processlist%'";
+    let started = std::time::Instant::now();
+    loop {
+        let rows = watcher.select(running, []).await.unwrap();
+        if rows[0].get::<i64>("n").unwrap() == 0 {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(1), "still running");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // The pool's only connection works again, without the kill's error.
+    let rows = db.select("SELECT 1 AS n", []).await.unwrap();
+    assert_eq!(rows[0].get::<i64>("n").unwrap(), 1);
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[tokio::test]
 async fn many_queries_share_a_small_pool() {
     for var in ["RUSTIQUE_TEST_MYSQL_URL", "RUSTIQUE_TEST_ORACLE_URL"] {
         let Ok(url) = std::env::var(var) else {

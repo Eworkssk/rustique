@@ -100,7 +100,7 @@ let db = Db::builder(&url).connect_lazy()?;   // no I/O, not async
 Wrap any query in `tokio::time::timeout` to bound it. What dropping the query future does:
 
 - **Oracle**: the call is interrupted on the server (OCIBreak, the statement ends with ORA-01013). A transaction stays usable; a pooled connection is replaced. PL/SQL `DBMS_SESSION.SLEEP` ignores the interrupt.
-- **MySQL**: the server finishes the statement; its connection is busy until then.
+- **MySQL**: a statement on a pooled connection is stopped with `KILL QUERY`, sent from a short-lived connection of its own; its connection goes back to the pool once the kill has landed. A statement in a transaction is not killed: the server finishes it, and its connection is busy until then (a dropped cursor stops as described in [large results](large-results.md)).
 
 The Oracle driver is blocking and runs on tokio's blocking threads. Queries wait for a free connection without holding a thread, so one pool uses at most `max_connections` of them.
 
