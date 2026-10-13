@@ -128,23 +128,23 @@ impl Schema {
     }
 }
 
+/// The user's tables on Oracle: not views, the recycle bin, nested tables or
+/// index-organized overflow segments.
+const ORACLE_TABLES: &str = "SELECT table_name FROM user_tables WHERE dropped = 'NO' \
+     AND nested = 'NO' AND secondary = 'N' \
+     AND (iot_type IS NULL OR iot_type <> 'IOT_OVERFLOW')";
+
 /// [`Schema::drop_all_tables`], keeping the tables in `keep` (case-insensitive).
 pub(crate) async fn drop_all_tables(db: &Db, keep: &[&str]) -> Result<()> {
     let db = &db.write();
     let sql = match db.dialect() {
-        Dialect::MySql => {
-            "SELECT table_name AS name FROM information_schema.tables \
+        Dialect::MySql => "SELECT table_name AS name FROM information_schema.tables \
              WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'"
-        }
-        // Not the recycle bin, nested tables or index-organized overflow segments.
-        Dialect::Oracle => {
-            "SELECT table_name AS name FROM user_tables WHERE dropped = 'NO' \
-             AND nested = 'NO' AND secondary = 'N' \
-             AND (iot_type IS NULL OR iot_type <> 'IOT_OVERFLOW')"
-        }
+            .to_owned(),
+        Dialect::Oracle => format!("SELECT table_name AS name FROM ({ORACLE_TABLES})"),
     };
     let mut names: Vec<String> = Vec::new();
-    for row in db.select(sql, []).await?.iter() {
+    for row in db.select(&sql, []).await?.iter() {
         let name: String = row.get("name")?;
         if !keep.iter().any(|k| k.eq_ignore_ascii_case(&name)) {
             names.push(name);
@@ -199,7 +199,7 @@ pub(crate) async fn snapshot(db: &Db) -> Result<String> {
     let (columns, keys) = match db.dialect() {
         // Defaults as SQL: literals quoted unless numeric, expressions in parentheses.
         Dialect::MySql => (
-            "SELECT table_name AS tbl, column_name AS col, is_nullable AS nullable, \
+            "SELECT c.table_name AS tbl, column_name AS col, is_nullable AS nullable, \
              column_type AS ty, CASE WHEN column_default IS NULL THEN NULL \
              WHEN extra LIKE '%DEFAULT_GENERATED%' THEN CONCAT('(', column_default, ')') \
              WHEN data_type IN ('tinyint', 'smallint', 'mediumint', 'int', 'bigint', \
@@ -207,8 +207,11 @@ pub(crate) async fn snapshot(db: &Db) -> Result<String> {
              ELSE QUOTE(column_default) END AS dflt, \
              CASE WHEN extra LIKE '%auto_increment%' THEN 'auto_increment' \
              WHEN extra LIKE '%on update%' THEN 'use_current_on_update' END AS extra \
-             FROM information_schema.columns \
-             WHERE table_schema = DATABASE() ORDER BY table_name, ordinal_position",
+             FROM information_schema.columns c JOIN information_schema.tables t \
+             ON t.table_schema = c.table_schema AND t.table_name = c.table_name \
+             AND t.table_type = 'BASE TABLE' \
+             WHERE c.table_schema = DATABASE() ORDER BY c.table_name, c.ordinal_position"
+                .to_owned(),
             // The index MySQL makes for a foreign key has the key's name and comes back with it.
             "SELECT s.table_name AS tbl, \
              CASE WHEN s.index_name = 'PRIMARY' THEN 'primary' ELSE s.index_name END AS name, \
@@ -233,26 +236,32 @@ pub(crate) async fn snapshot(db: &Db) -> Result<String> {
              AND r.constraint_name = k.constraint_name \
              WHERE k.table_schema = DATABASE() AND k.referenced_table_name IS NOT NULL \
              GROUP BY k.table_name, k.constraint_name, k.referenced_table_name, r.delete_rule \
-             ORDER BY 1, 3, 2",
+             ORDER BY 1, 3, 2"
+                .to_owned(),
         ),
         // `NUMBER(p,s)` and `VARCHAR2(n)` as written in DDL; `NUMBER(*,0)` for
         // `INTEGER`. `data_default` is a LONG, so it is trimmed below.
+        // Views have columns and may have (declared) constraints, so every
+        // query is limited to base tables.
         Dialect::Oracle => (
-            "SELECT table_name AS tbl, column_name AS col, nullable, data_type || CASE \
+            format!(
+                "SELECT table_name AS tbl, column_name AS col, nullable, data_type || CASE \
              WHEN data_type = 'NUMBER' AND data_scale IS NOT NULL \
              THEN '(' || NVL(TO_CHAR(data_precision), '*') || ',' || data_scale || ')' \
              WHEN char_used IS NOT NULL THEN '(' || char_length || ')' END AS ty, \
              data_default AS dflt, \
              CASE WHEN identity_column = 'YES' THEN 'auto_increment' END AS extra \
-             FROM user_tab_columns WHERE table_name NOT LIKE 'BIN$%' \
-             ORDER BY table_name, column_id",
+             FROM user_tab_columns WHERE table_name IN ({ORACLE_TABLES}) \
+             ORDER BY table_name, column_id"
+            ),
             // Plain B-tree indexes only: not LOB, function-based or primary key ones.
-            "SELECT c.table_name AS tbl, 'primary' AS name, 'primary key' AS kind, \
+            format!(
+                "SELECT c.table_name AS tbl, 'primary' AS name, 'primary key' AS kind, \
              LISTAGG(cc.column_name, ',') WITHIN GROUP (ORDER BY cc.position) AS cols, \
              NULL AS ref_tbl, NULL AS ref_cols, NULL AS on_delete \
              FROM user_constraints c JOIN user_cons_columns cc \
              ON cc.constraint_name = c.constraint_name \
-             WHERE c.constraint_type = 'P' AND c.table_name NOT LIKE 'BIN$%' \
+             WHERE c.constraint_type = 'P' AND c.table_name IN ({ORACLE_TABLES}) \
              GROUP BY c.table_name \
              UNION ALL \
              SELECT i.table_name, i.index_name, \
@@ -260,7 +269,7 @@ pub(crate) async fn snapshot(db: &Db) -> Result<String> {
              LISTAGG(ic.column_name, ',') WITHIN GROUP (ORDER BY ic.column_position), \
              NULL, NULL, NULL \
              FROM user_indexes i JOIN user_ind_columns ic ON ic.index_name = i.index_name \
-             WHERE i.index_type = 'NORMAL' AND i.table_name NOT LIKE 'BIN$%' \
+             WHERE i.index_type = 'NORMAL' AND i.table_name IN ({ORACLE_TABLES}) \
              AND NOT EXISTS (SELECT 1 FROM user_constraints p \
              WHERE p.constraint_type = 'P' AND p.index_name = i.index_name) \
              GROUP BY i.table_name, i.index_name, i.uniqueness \
@@ -274,12 +283,13 @@ pub(crate) async fn snapshot(db: &Db) -> Result<String> {
              c.delete_rule \
              FROM user_constraints c JOIN user_constraints r \
              ON r.constraint_name = c.r_constraint_name \
-             WHERE c.constraint_type = 'R' AND c.table_name NOT LIKE 'BIN$%' \
-             ORDER BY 1, 3, 2",
+             WHERE c.constraint_type = 'R' AND c.table_name IN ({ORACLE_TABLES}) \
+             ORDER BY 1, 3, 2"
+            ),
         ),
     };
     let mut lines = Vec::new();
-    for row in db.select(columns, []).await?.iter() {
+    for row in db.select(&columns, []).await?.iter() {
         let nullable: String = row.get("nullable")?;
         let nullable = if nullable.starts_with('Y') {
             "null"
@@ -303,7 +313,7 @@ pub(crate) async fn snapshot(db: &Db) -> Result<String> {
             extra.unwrap_or_default(),
         ]);
     }
-    for row in db.select(keys, []).await?.iter() {
+    for row in db.select(&keys, []).await?.iter() {
         let mut line: Vec<String> = vec![
             row.get("tbl")?,
             row.get("name")?,

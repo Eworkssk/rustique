@@ -14,6 +14,16 @@ struct User {
     posts: Rel<Vec<Post>>,
     #[rustique(belongs_to_many(Role, foreign_pivot_key = "user_id", pivot = ["level"]))]
     roles: Rel<Vec<Role>>,
+    // The guessed `articles` lacks `writer_id`; the foreign key leads to `blog_entries`.
+    #[rustique(has_many(Article, foreign_key = "writer_id"))]
+    articles: Rel<Vec<Article>>,
+}
+
+#[rustique::model(table = "blog_entries", schema = "fixture")]
+#[derive(Debug, Clone, Default)]
+struct Article {
+    id: i64,
+    writer_id: i64,
 }
 
 // The snapshot name comes from the `fixture.` prefix.
@@ -66,5 +76,6 @@ fn checked_strings_expand_to_themselves() {
     assert_eq!(User::TABLE, "users");
     assert_eq!(Post::TABLE, "fixture.posts");
     assert_eq!(Role::TABLE, "roles");
+    assert_eq!(Article::TABLE, "blog_entries");
     let _ = User::named();
 }

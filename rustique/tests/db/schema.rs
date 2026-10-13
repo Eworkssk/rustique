@@ -458,7 +458,7 @@ async fn fresh_drops_every_table() {
 /// `schema:snapshot` writes the lines `#[rustique::model]` checks with the
 /// `schema-check` feature (`rustique-macros/src/schema_check.rs`), plus the
 /// defaults and keys `make:migration --diff` compares; a column dropped by
-/// hand comes back in the generated migration's `up`.
+/// hand comes back in the generated migration's `up`. Views stay out.
 #[tokio::test]
 async fn snapshot_reads_back_and_diffs() {
     for var in ["RUSTIQUE_TEST_MYSQL_URL", "RUSTIQUE_TEST_ORACLE_URL"] {
@@ -480,6 +480,9 @@ async fn snapshot_reads_back_and_diffs() {
         })
         .await
         .unwrap();
+        let view =
+            "CREATE OR REPLACE VIEW orm_s_snapshot_view AS SELECT id, name FROM orm_s_snapshot";
+        db.statement(view, []).await.unwrap();
         let tag = format!("{var}-{}", std::process::id());
         let file = std::env::temp_dir().join(format!("rustique-schema-{tag}.txt"));
         let path = file.display().to_string();
@@ -493,6 +496,13 @@ async fn snapshot_reads_back_and_diffs() {
         };
         cli(&["schema:snapshot", "--env", var, "--path", &path]).await;
         let text = std::fs::read_to_string(&file).unwrap();
+        db.statement("DROP VIEW orm_s_snapshot_view", [])
+            .await
+            .unwrap();
+        assert!(
+            !text.to_lowercase().contains("orm_s_snapshot_view"),
+            "{text}"
+        );
 
         let lines: Vec<&str> = text
             .lines()
