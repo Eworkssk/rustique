@@ -6,7 +6,7 @@ mod morph;
 #[cfg_attr(not(feature = "schema-check"), allow(dead_code))]
 mod schema_check;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -426,7 +426,8 @@ struct RelationField {
     name: String,
     kind: RelationKind,
     related: Path,
-    keys: HashMap<String, Vec<LitStr>>,
+    // Sorted, so schema-check diagnostics come out in a stable order.
+    keys: BTreeMap<String, Vec<LitStr>>,
     table: Option<LitStr>,
     through: Option<Path>,
     /// `pivot_timestamps` on `belongs_to_many`: the created / updated columns.
@@ -625,7 +626,7 @@ fn parse_relation(
     name: &str,
 ) -> syn::Result<RelationField> {
     let mut related = None;
-    let mut keys = HashMap::new();
+    let mut keys = BTreeMap::new();
     let mut table = None;
     let mut through = None;
     let mut pivot_timestamps = None;
