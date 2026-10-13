@@ -83,7 +83,7 @@ pub(crate) fn check(
         return Ok(TokenStream2::new());
     };
     let table = &LitStr::new(name, table.span());
-    let keys = relation_keys(name, model, relations, morphs);
+    let keys = relation_keys(&snapshot, name, model, relations, morphs);
     let mut literals = Vec::new();
     for scope in relations.iter().filter_map(|r| r.scope.as_ref()) {
         column_literals(scope.to_token_stream(), &mut literals);
@@ -380,6 +380,8 @@ pub(crate) struct Snapshot {
     oracle: bool,
     /// Lower-case table name to its lower-case column names.
     tables: HashMap<String, HashMap<String, SnapshotColumn>>,
+    /// Foreign keys, lower-case: `(table, columns, referenced table)`.
+    foreign_keys: Vec<(String, Vec<String>, String)>,
 }
 
 #[derive(Debug)]
@@ -400,7 +402,18 @@ impl Snapshot {
             }
             match line.split('\t').collect::<Vec<_>>()[..] {
                 ["dialect", dialect] => snapshot.oracle = dialect == "oracle",
-                // Keys and the format version are for `make:migration --diff`.
+                [table, _, "foreign key", columns, referenced, ..] => {
+                    snapshot.foreign_keys.push((
+                        table.to_lowercase(),
+                        columns
+                            .to_lowercase()
+                            .split(',')
+                            .map(str::to_owned)
+                            .collect(),
+                        referenced.to_lowercase(),
+                    ));
+                }
+                // Other keys and the format version are for `make:migration --diff`.
                 ["version", _] | [_, _, "primary key" | "unique" | "index" | "foreign key", ..] => {
                 }
                 [table, column, nullable @ ("null" | "not null"), ty, ..] => {
@@ -426,6 +439,28 @@ impl Snapshot {
             }
         }
         Ok(snapshot)
+    }
+
+    /// The table that the foreign key of `table` over exactly `columns` references.
+    fn references(&self, table: &str, columns: &[String]) -> Option<String> {
+        let table = table.to_lowercase();
+        self.foreign_keys
+            .iter()
+            .find(|(t, c, _)| *t == table && c == columns)
+            .map(|(.., referenced)| referenced.clone())
+    }
+
+    /// The one table with a foreign key over exactly `columns` that references
+    /// `table`; `None` when no table or several do.
+    fn referencing(&self, table: &str, columns: &[String]) -> Option<String> {
+        let table = table.to_lowercase();
+        let mut found = self
+            .foreign_keys
+            .iter()
+            .filter(|(_, c, r)| *r == table && c == columns)
+            .map(|(t, ..)| t);
+        let first = found.next()?;
+        found.all(|t| t == first).then(|| first.clone())
     }
 }
 
@@ -497,26 +532,63 @@ fn combine(errors: impl IntoIterator<Item = syn::Error>) -> Option<syn::Error> {
 
 /// The columns that relation attributes name, each with the table it belongs in.
 ///
-/// shortcut: the related (and `through`) model's table is known only as a Rust
-/// type, so it is guessed as the snake_case plural of the type name (`BlogPost`
-/// → `blog_posts`) and skipped when the snapshot has no such table; a model with
+/// The related (and `through`) model's table is known only as a Rust type, so
+/// it is found through the snapshot's foreign keys: the one of `belongs_to` on
+/// the model's table, the one of `belongs_to_many` on the pivot, the single
+/// table whose foreign key references the parent (`has_one` / `has_many`) or
+/// the `through` table (`has_*_through`, whose `through` table references the
+/// parent), over exactly the relation's key columns.
+///
+/// shortcut: when no foreign key matches (morph relations never do), the table
+/// is guessed as the snake_case plural of the type name (`BlogPost` →
+/// `blog_posts`) and skipped when the snapshot has no such table; a model with
 /// another table while a table of the guessed name exists is checked against the
 /// wrong one. Upgrade when the macro can see the related model's `TABLE`.
 pub(crate) fn relation_keys(
+    snapshot: &Snapshot,
     table: &str,
     model: &Ident,
     relations: &[RelationField],
     morphs: &[MorphToField],
 ) -> Vec<(String, LitStr)> {
     let guess = |path: &syn::Path| format!("{}s", snake(&type_name(path)));
+    let id = |name: &str| vec![format!("{name}_id")];
+    let parent = snake(&model.to_string());
     let mut keys = Vec::new();
     for relation in relations {
-        let related = guess(&relation.related);
+        // The relation's `option` columns, or the default ones.
+        let columns = |option: &str, default: Vec<String>| {
+            relation.keys.get(option).map_or(default, |keys| {
+                keys.iter().map(|k| k.value().to_lowercase()).collect()
+            })
+        };
         let pivot = relation
             .kind
             .has_pivot()
-            .then(|| relation.pivot_table(&snake(&model.to_string())));
-        let through = relation.through.as_ref().map(guess);
+            .then(|| relation.pivot_table(&parent));
+        let through = relation.through.as_ref().map(|path| {
+            snapshot
+                .referencing(table, &columns("first_key", id(&parent)))
+                .unwrap_or_else(|| guess(path))
+        });
+        let related = match (relation.kind, &pivot, &through, &relation.through) {
+            (RelationKind::BelongsTo, ..) => {
+                snapshot.references(table, &columns("foreign_key", id(&relation.name)))
+            }
+            (RelationKind::HasOne | RelationKind::HasMany, ..) => {
+                snapshot.referencing(table, &columns("foreign_key", id(&parent)))
+            }
+            (RelationKind::BelongsToMany, Some(pivot), ..) => {
+                let default = id(&snake(&type_name(&relation.related)));
+                snapshot.references(pivot, &columns("related_pivot_key", default))
+            }
+            (_, _, Some(through), Some(path)) => {
+                let default = id(&snake(&type_name(path)));
+                snapshot.referencing(through, &columns("second_key", default))
+            }
+            _ => None,
+        }
+        .unwrap_or_else(|| guess(&relation.related));
         for (option, columns) in &relation.keys {
             let owner = match (option.as_str(), relation.kind) {
                 ("local_key" | "parent_key", _) | ("foreign_key", RelationKind::BelongsTo) => {
@@ -850,7 +922,13 @@ mod tests {
             unreachable!()
         };
         let fields = crate::ModelFields::parse(&mut named.named, None).unwrap();
-        let keys = relation_keys("users", &item.ident, &fields.relations, &fields.morphs);
+        let keys = relation_keys(
+            &snapshot,
+            "users",
+            &item.ident,
+            &fields.relations,
+            &fields.morphs,
+        );
         let mut errors: Vec<String> = check_keys(&snapshot, &keys)
             .err()
             .into_iter()
@@ -870,6 +948,66 @@ mod tests {
                 "table `users` has no column `owner_type` in rustique-schema.txt",
             ]
         );
+    }
+
+    #[test]
+    fn finds_related_tables_through_foreign_keys() {
+        let snapshot = Snapshot::parse(
+            "users\tusers_squad_id_foreign\tforeign key\tsquad_id\tcrews\tid\trestrict\n\
+             blog_entries\tfk1\tforeign key\twriter_id\tusers\tid\tcascade\n\
+             role_user\tfk2\tforeign key\trole_id\tpermissions\tid\tcascade\n\
+             memberships\tfk3\tforeign key\tmember_id\tusers\tid\tcascade\n\
+             bills\tfk4\tforeign key\tmembership_id\tmemberships\tid\tcascade\n\
+             notes\tfk5\tforeign key\tauthor_id\tusers\tid\tcascade\n\
+             replies\tfk6\tforeign key\tauthor_id\tusers\tid\tcascade\n",
+        )
+        .unwrap();
+        let mut item: syn::ItemStruct = parse_quote! {
+            struct User {
+                // Default `squad_id`, on `users`, references `crews`.
+                #[rustique(belongs_to(Team, owner_key = "code"))]
+                squad: Rel<Option<Team>>,
+                // Exactly one table references `users` over `writer_id`.
+                #[rustique(has_many(Article, foreign_key = "writer_id"))]
+                articles: Rel<Vec<Article>>,
+                // Default pivot `role_user`, default `role_id` references `permissions`.
+                #[rustique(belongs_to_many(Role, related_key = "slug"))]
+                roles: Rel<Vec<Role>>,
+                #[rustique(has_many_through(Invoice, through = Membership, first_key = "member_id", second_key = "membership_id"))]
+                invoices: Rel<Vec<Invoice>>,
+                // Two tables reference `users` over `author_id`: the guess.
+                #[rustique(has_many(Comment, foreign_key = "author_id"))]
+                comments: Rel<Vec<Comment>>,
+                // No foreign key at all: the guess.
+                #[rustique(has_one(Profile, foreign_key = "owner_id"))]
+                profile: Rel<Option<Profile>>,
+            }
+        };
+        let syn::Fields::Named(named) = &mut item.fields else {
+            unreachable!()
+        };
+        let fields = crate::ModelFields::parse(&mut named.named, None).unwrap();
+        let keys: Vec<(String, String)> = relation_keys(
+            &snapshot,
+            "users",
+            &item.ident,
+            &fields.relations,
+            &fields.morphs,
+        )
+        .into_iter()
+        .map(|(table, column)| (table, column.value()))
+        .collect();
+        let expected = [
+            ("crews", "code"),
+            ("blog_entries", "writer_id"),
+            ("permissions", "slug"),
+            ("memberships", "member_id"),
+            ("bills", "membership_id"),
+            ("comments", "author_id"),
+            ("profiles", "owner_id"),
+        ]
+        .map(|(t, c)| (t.to_owned(), c.to_owned()));
+        assert_eq!(keys, expected);
     }
 
     #[test]

@@ -14,3 +14,7 @@ roles	id	not null	bigint
 role_user	user_id	not null	bigint
 role_user	role_id	not null	bigint
 role_user	level	not null	int
+articles	id	not null	bigint
+blog_entries	id	not null	bigint
+blog_entries	writer_id	not null	bigint
+blog_entries	blog_entries_writer_id_foreign	foreign key	writer_id	users	id	cascade
