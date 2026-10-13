@@ -3,7 +3,7 @@
 #   RUSTIQUE_TEST_ORACLE_URL=oracle://orm:secret@127.0.0.1:11521/XEPDB1
 #
 # Oracle XE 21c stands in for 19c locally (no free 19c image exists). It accepts
-# a few things 19c does not, so CI should also run against a real 19c database.
+# a few things 19c does not; CI (.github/workflows/ci.yml) also runs against doctorkirk/oracle-19c.
 services:
   mysql:
     image: mysql:8.4
