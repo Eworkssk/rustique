@@ -9,6 +9,7 @@ mod factories;
 mod helpers;
 mod joins;
 mod models;
+mod query_methods;
 mod relation_constraints;
 mod relations;
 mod schema;
