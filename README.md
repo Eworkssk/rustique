@@ -16,7 +16,7 @@
 
 [Documentation](https://rustique.eworks.sk/docs/) ·
 [Getting started](https://rustique.eworks.sk/docs/getting-started/) ·
-[Cheat sheet](https://rustique.eworks.sk/docs/#cheat-sheet)
+[Cheat sheet](https://rustique.eworks.sk/docs/cheat-sheet/)
 
 </div>
 
