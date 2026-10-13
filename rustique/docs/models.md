@@ -39,6 +39,7 @@ Every field is a column, named like the field unless `#[rustique(column = "...")
 | `hooks` | Use your own `impl Hooks for Flight`, see [events](events.md) |
 | `observers(Audit, ...)` | Register observers, see [events](events.md) |
 | `morph_alias = "App\\Models\\Flight"` | Value stored in `*_type` columns of polymorphic relations. Default: the table name |
+| `schema = "billing"` | The [schema check](migrations.md#compile-time-schema-check) reads `rustique-schema.billing.txt`. Default: the schema of a `schema.table` name, else `rustique-schema.txt` |
 | `created_at = "..."`, `updated_at = "..."`, `deleted_at = "..."` | Column names for `timestamps` / `soft_deletes`, see [Timestamps](#timestamps) |
 | `global_scopes(Tenant, ...)` | Filters every query applies, see [Global scopes](events.md#global-scopes) |
 

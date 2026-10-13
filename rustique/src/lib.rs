@@ -70,6 +70,98 @@ mod docs {
     #[doc = include_str!("../docs/dialects.md")]
     mod dialects {}
 }
+
+/// One `compile_fail` doctest per error of the compile-time schema check,
+/// against `rustique-schema.fixture.txt`; what passes is in `tests/sql/schema_check.rs`.
+///
+/// A column not in the table:
+/// ```compile_fail
+/// #[rustique::model(table = "users", schema = "fixture")]
+/// #[derive(Default)]
+/// struct User { id: i64, mail: String }
+/// ```
+/// A table found through a `schema.table` name, without the column:
+/// ```compile_fail
+/// #[rustique::model(table = "fixture.posts")]
+/// #[derive(Default)]
+/// struct Post { id: i64, body: String }
+/// ```
+/// A relation key not in the related table (`Post` is looked up as `posts`):
+/// ```compile_fail
+/// # use rustique::Rel;
+/// # #[rustique::model(table = "posts")]
+/// # #[derive(Default)]
+/// # struct Post { id: i64 }
+/// #[rustique::model(table = "users", schema = "fixture")]
+/// #[derive(Default)]
+/// struct User { id: i64, #[rustique(has_many(Post, foreign_key = "user_id"))] posts: Rel<Vec<Post>> }
+/// ```
+/// A pivot column not in the pivot table:
+/// ```compile_fail
+/// # use rustique::Rel;
+/// # #[rustique::model(table = "roles")]
+/// # #[derive(Default)]
+/// # struct Role { id: i64 }
+/// #[rustique::model(table = "users", schema = "fixture")]
+/// #[derive(Default)]
+/// struct User { id: i64, #[rustique(belongs_to_many(Role, pivot = ["rank"]))] roles: Rel<Vec<Role>> }
+/// ```
+/// `morph_to` columns not in the model's table:
+/// ```compile_fail
+/// # use rustique::Rel;
+/// # #[rustique::model(table = "posts")]
+/// # #[derive(Default, Debug, Clone)]
+/// # struct Post { id: i64 }
+/// # #[derive(rustique::MorphTo, Debug, Clone)]
+/// # enum Target { Post(Post) }
+/// #[rustique::model(table = "users", schema = "fixture")]
+/// #[derive(Default)]
+/// struct User { id: i64, #[rustique(morph_to)] owner: Rel<Option<Target>> }
+/// ```
+/// `col!` with a missing table, column, or a lone column no table has:
+/// ```compile_fail
+/// rustique::col!(schema = "fixture", "comments.id");
+/// ```
+/// ```compile_fail
+/// rustique::col!(schema = "fixture", "users.mail");
+/// ```
+/// ```compile_fail
+/// rustique::col!(schema = "fixture", "mail");
+/// ```
+/// A `table.column` string in a scope or a relation `scope`:
+/// ```compile_fail
+/// # use rustique::Query;
+/// # #[rustique::model(table = "users")]
+/// # #[derive(Default)]
+/// # struct User { id: i64 }
+/// #[rustique::scopes(schema = "fixture")]
+/// impl User {
+///     fn scope_x(q: Query<User>) -> Query<User> { q.order_by("users.mail") }
+/// }
+/// ```
+/// ```compile_fail
+/// # use rustique::Rel;
+/// # #[rustique::model(table = "users")]
+/// # #[derive(Default)]
+/// # struct User { id: i64 }
+/// #[rustique::model(table = "posts", schema = "fixture")]
+/// #[derive(Default)]
+/// struct Post { id: i64, #[rustique(belongs_to(User, scope = |q| q.where_null("users.mail")))] user: Rel<Option<User>> }
+/// ```
+/// `sql!` with a missing table, or a missing column of a table it names:
+/// ```compile_fail
+/// rustique::sql!(schema = "fixture", "SELECT * FROM users JOIN comments ON 1 = 1");
+/// ```
+/// ```compile_fail
+/// rustique::sql!(schema = "fixture", "SELECT users.mail FROM users");
+/// ```
+/// A snapshot name that is not a plain name:
+/// ```compile_fail
+/// rustique::col!(schema = "../fixture", "users.id");
+/// ```
+#[cfg(all(doctest, feature = "schema-check"))]
+mod schema_check_errors {}
+
 mod backtrace;
 mod collection;
 mod db;

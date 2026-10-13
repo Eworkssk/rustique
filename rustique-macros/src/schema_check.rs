@@ -1,6 +1,7 @@
 //! The `schema-check` feature: compares a model's fields with the schema
 //! snapshot that the CLI's `schema:snapshot` writes to `rustique-schema.txt`
-//! next to the crate's `Cargo.toml` (format in `rustique/src/schema.rs`).
+//! next to the crate's `Cargo.toml` (format in `rustique/src/schema.rs`), or
+//! to `rustique-schema.<name>.txt` with `--name`, read for `schema = "<name>"`.
 //!
 //! Without the file nothing is checked. Types the check does not know,
 //! such as `#[derive(rustique::Cast)]` types, are checked for existence only.
@@ -20,19 +21,36 @@ use crate::{Column, MorphToField, RelationField, RelationKind, snake, type_name}
 
 const FILE: &str = "rustique-schema.txt";
 
-/// The snapshot next to the crate's `Cargo.toml`, with tokens that make cargo
+/// The snapshot next to the crate's `Cargo.toml`: `rustique-schema.txt`, or
+/// `rustique-schema.<name>.txt` for a `name`, with tokens that make cargo
 /// rebuild the caller when the file changes; `None` without the file.
-pub(crate) fn load() -> syn::Result<Option<(Snapshot, TokenStream2)>> {
+pub(crate) fn load(name: Option<&str>) -> syn::Result<Option<(Snapshot, TokenStream2)>> {
+    let file = match name {
+        Some(name)
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')) =>
+        {
+            return Err(syn::Error::new(
+                Span::call_site(),
+                format!("schema snapshot name `{name}` may only hold letters, digits, `_` and `-`"),
+            ));
+        }
+        Some(name) => format!("rustique-schema.{name}.txt"),
+        None => FILE.to_owned(),
+    };
     let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") else {
         return Ok(None);
     };
-    let path = Path::new(&dir).join(FILE);
+    let path = Path::new(&dir).join(&file);
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Ok(None);
     };
-    let snapshot = Snapshot::parse(&text).map_err(|problem| {
+    let mut snapshot = Snapshot::parse(&text).map_err(|problem| {
         syn::Error::new(Span::call_site(), format!("{}: {problem}", path.display()))
     })?;
+    snapshot.file = file;
     let path = path.display().to_string();
     Ok(Some((
         snapshot,
@@ -44,17 +62,28 @@ pub(crate) fn load() -> syn::Result<Option<(Snapshot, TokenStream2)>> {
 
 /// Errors for every field, relation key or column string of a relation
 /// `scope` that does not match the snapshot, or the rebuild tokens of [`load`].
+///
+/// The snapshot is the one named by `schema`, else by the schema of a
+/// `schema.table` name, else the default one.
 pub(crate) fn check(
+    schema: Option<&LitStr>,
     table: &LitStr,
     model: &Ident,
     columns: &[Column],
     relations: &[RelationField],
     morphs: &[MorphToField],
 ) -> syn::Result<TokenStream2> {
-    let Some((snapshot, rebuild)) = load()? else {
+    let qualified = table.value();
+    let (prefix, name) = match qualified.rsplit_once('.') {
+        Some((prefix, name)) => (Some(prefix), name),
+        None => (None, qualified.as_str()),
+    };
+    let schema = schema.map(LitStr::value);
+    let Some((snapshot, rebuild)) = load(schema.as_deref().or(prefix))? else {
         return Ok(TokenStream2::new());
     };
-    let keys = relation_keys(&table.value(), model, relations, morphs);
+    let table = &LitStr::new(name, table.span());
+    let keys = relation_keys(name, model, relations, morphs);
     let mut literals = Vec::new();
     for scope in relations.iter().filter_map(|r| r.scope.as_ref()) {
         column_literals(scope.to_token_stream(), &mut literals);
@@ -74,8 +103,8 @@ pub(crate) fn check(
 }
 
 /// `col!("table.column")`: the literal, after [`check_reference`] with `strict`.
-pub(crate) fn col(literal: &LitStr) -> syn::Result<TokenStream2> {
-    let Some((snapshot, rebuild)) = load()? else {
+pub(crate) fn col(schema: Option<&str>, literal: &LitStr) -> syn::Result<TokenStream2> {
+    let Some((snapshot, rebuild)) = load(schema)? else {
         return Ok(quote!(#literal));
     };
     check_reference(&snapshot, literal, true)?;
@@ -84,8 +113,11 @@ pub(crate) fn col(literal: &LitStr) -> syn::Result<TokenStream2> {
 
 /// Errors for the `table.column` strings that `tokens` passes to query-builder
 /// methods ([`column_literals`]), or the rebuild tokens of [`load`].
-pub(crate) fn check_tokens(tokens: TokenStream2) -> syn::Result<TokenStream2> {
-    let Some((snapshot, rebuild)) = load()? else {
+pub(crate) fn check_tokens(
+    schema: Option<&str>,
+    tokens: TokenStream2,
+) -> syn::Result<TokenStream2> {
+    let Some((snapshot, rebuild)) = load(schema)? else {
         return Ok(TokenStream2::new());
     };
     let mut literals = Vec::new();
@@ -105,16 +137,16 @@ pub(crate) fn check_reference(
     literal: &LitStr,
     strict: bool,
 ) -> syn::Result<()> {
-    let value = literal.value();
+    let (value, file) = (literal.value(), &snapshot.file);
     let plain = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
     let fail = |message: String| Err(syn::Error::new_spanned(literal, message));
     match value.split_once('.') {
         Some((table, column)) if plain(table) && (plain(column) || column == "*") => {
             match snapshot.tables.get(&table.to_lowercase()) {
-                None if strict => fail(format!("table `{table}` is not in {FILE}")),
+                None if strict => fail(format!("table `{table}` is not in {file}")),
                 Some(columns) if column != "*" && !columns.contains_key(&column.to_lowercase()) => {
                     fail(format!(
-                        "table `{table}` has no column `{column}` in {FILE}"
+                        "table `{table}` has no column `{column}` in {file}"
                     ))
                 }
                 _ => Ok(()),
@@ -127,15 +159,15 @@ pub(crate) fn check_reference(
                 .values()
                 .any(|t| t.contains_key(&value.to_lowercase())) =>
         {
-            fail(format!("no table has a column `{value}` in {FILE}"))
+            fail(format!("no table has a column `{value}` in {file}"))
         }
         _ => Ok(()),
     }
 }
 
 /// `sql!("SELECT ...")`: the literal, after [`check_sql`].
-pub(crate) fn sql(literal: &LitStr) -> syn::Result<TokenStream2> {
-    let Some((snapshot, rebuild)) = load()? else {
+pub(crate) fn sql(schema: Option<&str>, literal: &LitStr) -> syn::Result<TokenStream2> {
+    let Some((snapshot, rebuild)) = load(schema)? else {
         return Ok(quote!(#literal));
     };
     check_sql(&snapshot, &literal.value())
@@ -199,6 +231,7 @@ fn sql_tokens(sql: &str) -> Vec<SqlToken<'_>> {
 /// is seen. Upgrade to a real SQL parser if false negatives start to matter.
 fn check_sql(snapshot: &Snapshot, sql: &str) -> Result<(), String> {
     use SqlToken::{Punct, Word};
+    let file = &snapshot.file;
     let tokens = sql_tokens(sql);
     let is = |i: usize, keywords: &[&str]| {
         i < tokens.len()
@@ -242,7 +275,7 @@ fn check_sql(snapshot: &Snapshot, sql: &str) -> Result<(), String> {
             continue;
         }
         if !snapshot.tables.contains_key(&name.to_lowercase()) {
-            return Err(format!("table `{name}` is not in {FILE}"));
+            return Err(format!("table `{name}` is not in {file}"));
         }
         tables.push(name.to_lowercase());
     }
@@ -259,7 +292,7 @@ fn check_sql(snapshot: &Snapshot, sql: &str) -> Result<(), String> {
         }
         if !snapshot.tables[&table.to_lowercase()].contains_key(&column.to_lowercase()) {
             return Err(format!(
-                "table `{table}` has no column `{column}` in {FILE}"
+                "table `{table}` has no column `{column}` in {file}"
             ));
         }
     }
@@ -342,6 +375,8 @@ pub(crate) fn column_literals(tokens: TokenStream2, found: &mut Vec<LitStr>) {
 
 #[derive(Debug, Default)]
 pub(crate) struct Snapshot {
+    /// File name, for messages.
+    file: String,
     oracle: bool,
     /// Lower-case table name to its lower-case column names.
     tables: HashMap<String, HashMap<String, SnapshotColumn>>,
@@ -355,7 +390,10 @@ struct SnapshotColumn {
 
 impl Snapshot {
     pub(crate) fn parse(text: &str) -> Result<Self, String> {
-        let mut snapshot = Self::default();
+        let mut snapshot = Self {
+            file: FILE.to_owned(),
+            ..Self::default()
+        };
         for (number, line) in text.lines().enumerate() {
             if line.is_empty() || line.starts_with('#') {
                 continue;
@@ -396,15 +434,11 @@ pub(crate) fn check_columns(
     table: &LitStr,
     columns: &[Column],
 ) -> syn::Result<()> {
-    let name = table.value();
-    // shortcut: `schema.table` names a schema the snapshot does not cover; skipped.
-    if name.contains('.') {
-        return Ok(());
-    }
+    let (name, file) = (table.value(), &snapshot.file);
     let Some(snapshot_columns) = snapshot.tables.get(&name.to_lowercase()) else {
         return Err(syn::Error::new_spanned(
             table,
-            format!("table `{name}` is not in {FILE}; migrate, then run `schema:snapshot` again"),
+            format!("table `{name}` is not in {file}; migrate, then run `schema:snapshot` again"),
         ));
     };
     let mut errors: Option<syn::Error> = None;
@@ -416,7 +450,7 @@ pub(crate) fn check_columns(
         let Some(found) = snapshot_columns.get(&column.name.to_lowercase()) else {
             fail(syn::Error::new_spanned(
                 &column.ident,
-                format!("table `{name}` has no column `{}` in {FILE}", column.name),
+                format!("table `{name}` has no column `{}` in {file}", column.name),
             ));
             continue;
         };
@@ -530,13 +564,14 @@ pub(crate) fn relation_keys(
 
 /// Errors for `(table, column)` pairs whose table is in the snapshot without the column.
 pub(crate) fn check_keys(snapshot: &Snapshot, keys: &[(String, LitStr)]) -> syn::Result<()> {
+    let file = &snapshot.file;
     let errors = keys.iter().filter_map(|(table, column)| {
         let columns = snapshot.tables.get(&table.to_lowercase())?;
         (!columns.contains_key(&column.value().to_lowercase())).then(|| {
             syn::Error::new_spanned(
                 column,
                 format!(
-                    "table `{table}` has no column `{}` in {FILE}",
+                    "table `{table}` has no column `{}` in {file}",
                     column.value()
                 ),
             )
@@ -724,10 +759,6 @@ mod tests {
             column("point", parse_quote!(Point)),
         ];
         assert_eq!(errors(MYSQL, "USERS", &columns), Vec::<String>::new());
-        assert_eq!(
-            errors(MYSQL, "other_schema.users", &columns),
-            Vec::<String>::new()
-        );
     }
 
     #[test]

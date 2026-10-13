@@ -86,3 +86,4 @@ Rules worth knowing before you write code:
 6. Turn on `rustique::prevent_lazy_loading(rustique::LazyLoading::Deny)` in development to catch N+1 loops.
 7. Timestamps are UTC unless `rustique::set_timezone(...)` sets the application time zone (Laravel's `app.timezone`) at startup.
 8. Schema changes: edit `rustique-schema.txt` (written by `schema:snapshot`), then `make:migration <name> --diff` writes the migration from the database to it ([details](migrations.md#migrations-from-a-schema-diff)).
+9. With the `schema-check` feature, models, relation keys, `col!("t.c")`, `sql!("...")` and `"t.c"` strings in scopes are checked against `rustique-schema.txt` at compile time; `schema = "billing"` (on models, scopes, `col!`, `sql!`) reads `rustique-schema.billing.txt`. See [the schema check](migrations.md#compile-time-schema-check).

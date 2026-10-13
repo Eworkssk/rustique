@@ -1,0 +1,16 @@
+# Fixture for the schema-check tests (`tests/sql/schema_check.rs`, the
+# `compile_fail` doctests in `src/lib.rs`): models with `schema = "fixture"` read it.
+dialect	mysql
+version	2
+users	id	not null	bigint
+users	email	not null	varchar(255)
+users	nickname	null	varchar(50)
+users	commentable_type	null	varchar(50)
+users	commentable_id	null	bigint
+posts	id	not null	bigint
+posts	author_id	not null	bigint
+posts	title	not null	varchar(200)
+roles	id	not null	bigint
+role_user	user_id	not null	bigint
+role_user	role_id	not null	bigint
+role_user	level	not null	int

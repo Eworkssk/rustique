@@ -29,7 +29,8 @@ use syn::{
 ///
 /// With the `schema-check` feature, the fields are checked against the
 /// `rustique-schema.txt` snapshot next to the crate's `Cargo.toml`, when there is
-/// one: see the `schema:snapshot` command in `rustique::cli`.
+/// one (`rustique-schema.<name>.txt` with `schema = "<name>"`): see the
+/// `schema:snapshot` command in `rustique::cli`.
 #[proc_macro_attribute]
 pub fn model(args: TokenStream, item: TokenStream) -> TokenStream {
     let mut options = Options::default();
@@ -48,13 +49,41 @@ pub fn model(args: TokenStream, item: TokenStream) -> TokenStream {
 /// error when the table is not in the snapshot, the table has no such column,
 /// or (without a table) no table has the column. `table.*` checks the table;
 /// other shapes, such as `schema.table.column`, are not checked.
+/// `col!(schema = "billing", "invoices.total")` reads the
+/// `rustique-schema.billing.txt` snapshot.
 #[proc_macro]
 pub fn col(input: TokenStream) -> TokenStream {
-    let column = parse_macro_input!(input as LitStr);
-    #[cfg(feature = "schema-check")]
-    let expanded = schema_check::col(&column);
-    #[cfg(not(feature = "schema-check"))]
-    let expanded = Ok::<_, syn::Error>(quote!(#column));
+    checked_literal(input, schema_check::col)
+}
+
+/// `"..."` or `schema = "name", "..."`: the literal, after `check` with the
+/// `schema-check` feature.
+fn checked_literal(
+    input: TokenStream,
+    check: fn(Option<&str>, &LitStr) -> syn::Result<TokenStream2>,
+) -> TokenStream {
+    let parser = |input: ParseStream| -> syn::Result<(Option<LitStr>, LitStr)> {
+        let mut schema = None;
+        if input.peek(Ident) {
+            let key: Ident = input.parse()?;
+            if key != "schema" {
+                return Err(syn::Error::new_spanned(
+                    key,
+                    "expected a string, or `schema = \"...\"` and a string",
+                ));
+            }
+            input.parse::<Token![=]>()?;
+            schema = Some(input.parse()?);
+            input.parse::<Token![,]>()?;
+        }
+        Ok((schema, input.parse()?))
+    };
+    let (schema, literal) = parse_macro_input!(input with parser);
+    let expanded = if cfg!(feature = "schema-check") {
+        check(schema.map(|s| s.value()).as_deref(), &literal)
+    } else {
+        Ok(quote!(#literal))
+    };
     expanded
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
@@ -67,17 +96,11 @@ pub fn col(input: TokenStream) -> TokenStream {
 /// error when a table after `FROM`, `JOIN`, `INSERT INTO`, `MERGE INTO` or a
 /// leading `UPDATE` is not in the snapshot, or when a `table.column`
 /// reference to such a table names a missing column. Anything ambiguous is
-/// skipped: see the schema check in `docs/migrations.md`.
+/// skipped: see the schema check in `docs/migrations.md`. `sql!(schema =
+/// "billing", "...")` reads the `rustique-schema.billing.txt` snapshot.
 #[proc_macro]
 pub fn sql(input: TokenStream) -> TokenStream {
-    let sql = parse_macro_input!(input as LitStr);
-    #[cfg(feature = "schema-check")]
-    let expanded = schema_check::sql(&sql);
-    #[cfg(not(feature = "schema-check"))]
-    let expanded = Ok::<_, syn::Error>(quote!(#sql));
-    expanded
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+    checked_literal(input, schema_check::sql)
 }
 
 /// Stores a type in a column: implements `rustique::FromValue` and
@@ -129,22 +152,28 @@ pub fn derive_morph_to(item: TokenStream) -> TokenStream {
 ///
 /// With the `schema-check` feature, `"table.column"` literals passed to
 /// `where_*`, `order_by*`, `group_by` and `select` in the block are checked
-/// against the schema snapshot when it has the table.
+/// against the schema snapshot when it has the table;
+/// `#[rustique::scopes(schema = "billing")]` reads `rustique-schema.billing.txt`.
 #[proc_macro_attribute]
 pub fn scopes(args: TokenStream, item: TokenStream) -> TokenStream {
+    let mut schema: Option<LitStr> = None;
+    let parser = syn::meta::parser(|meta| {
+        if meta.path.is_ident("schema") {
+            schema = Some(meta.value()?.parse()?);
+            Ok(())
+        } else {
+            Err(meta.error("#[rustique::scopes] takes only `schema = \"...\"`"))
+        }
+    });
+    parse_macro_input!(args with parser);
     let item = parse_macro_input!(item as ItemImpl);
-    let result = if args.is_empty() {
-        expand_scopes(item)
-    } else {
-        Err(syn::Error::new(
-            Span::call_site(),
-            "#[rustique::scopes] takes no options",
-        ))
-    };
-    result.unwrap_or_else(syn::Error::into_compile_error).into()
+    expand_scopes(item, schema)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
 
-fn expand_scopes(item: ItemImpl) -> syn::Result<TokenStream2> {
+#[cfg_attr(not(feature = "schema-check"), allow(unused_variables))]
+fn expand_scopes(item: ItemImpl, schema: Option<LitStr>) -> syn::Result<TokenStream2> {
     let self_ty = &item.self_ty;
     let model = match &**self_ty {
         Type::Path(path) if item.generics.params.is_empty() && item.trait_.is_none() => {
@@ -229,7 +258,8 @@ fn expand_scopes(item: ItemImpl) -> syn::Result<TokenStream2> {
     }
     let doc = format!("Query scopes of `{model}`, from its `#[rustique::scopes]` block.");
     #[cfg(feature = "schema-check")]
-    let schema_check = schema_check::check_tokens(quote!(#item))?;
+    let schema_check =
+        schema_check::check_tokens(schema.map(|s| s.value()).as_deref(), quote!(#item))?;
     #[cfg(not(feature = "schema-check"))]
     let schema_check = TokenStream2::new();
     Ok(quote! {
@@ -316,6 +346,9 @@ struct Options {
     observers: Vec<Path>,
     global_scopes: Vec<Path>,
     morph_alias: Option<LitStr>,
+    /// `schema = "name"`: the schema check reads `rustique-schema.<name>.txt`.
+    #[cfg_attr(not(feature = "schema-check"), allow(dead_code))]
+    schema: Option<LitStr>,
     /// `uuid` or `ulid`: the key is generated on insert when empty.
     unique_id: Option<Ident>,
     /// Renamed `created_at` / `updated_at` / `deleted_at` columns.
@@ -341,6 +374,8 @@ impl Options {
                 return Err(meta.error("use one of `uuid` and `ulid`"));
             }
             self.unique_id = meta.path.get_ident().cloned();
+        } else if meta.path.is_ident("schema") {
+            self.schema = Some(meta.value()?.parse()?);
         } else if meta.path.is_ident("morph_alias") {
             self.morph_alias = Some(meta.value()?.parse()?);
         } else if meta.path.is_ident("created_at") {
@@ -362,7 +397,7 @@ impl Options {
         } else {
             return Err(meta.error(
                 "unknown model option; expected `table`, `timestamps`, `soft_deletes`, \
-                 `incrementing`, `hooks`, `observers`, `global_scopes`, `morph_alias`, `uuid`, `ulid`, \
+                 `incrementing`, `hooks`, `observers`, `global_scopes`, `morph_alias`, `schema`, `uuid`, `ulid`, \
                  `created_at`, `updated_at` or `deleted_at`",
             ));
         }
@@ -1055,6 +1090,7 @@ fn expand(options: Options, mut item: ItemStruct) -> syn::Result<TokenStream2> {
     let fill = expand_fill(&item, &fields.columns, &managed, &deserialize)?;
     #[cfg(feature = "schema-check")]
     let schema_check = schema_check::check(
+        options.schema.as_ref(),
         &table,
         &item.ident,
         &fields.columns,

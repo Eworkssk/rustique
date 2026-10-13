@@ -13,6 +13,7 @@ mod query_methods;
 mod relation_constraints;
 mod relations;
 mod schema;
+mod schema_check;
 mod select;
 mod wheres;
 

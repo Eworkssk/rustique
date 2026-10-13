@@ -223,7 +223,7 @@ cargo run --bin rustique -- migrate
 | `db:seed` | run the seeder |
 | `make:migration <name> [--path dir]` | write a migration file (default `src/migrations`). A `create_<table>_table` name gets a `Schema::create` skeleton |
 | `make:migration <name> --diff [--snapshot file]` | write a migration from the database to the schema snapshot ([migrations from a schema diff](#migrations-from-a-schema-diff)) |
-| `schema:snapshot [--path file]` | write the schema snapshot for the [compile-time model check](#compile-time-schema-check) (default `rustique-schema.txt`) |
+| `schema:snapshot [--name n] [--path file]` | write the schema snapshot for the [compile-time model check](#compile-time-schema-check) (default `rustique-schema.txt`; `rustique-schema.n.txt` with `--name n`) |
 
 The database URL comes from `$DATABASE_URL`, or the variable named by `--env VAR`. Never a command-line argument, where `ps` and shell history would show the password.
 
@@ -252,7 +252,9 @@ Each model gets a compile error at the field for:
 - a column type the field type cannot read, such as a `varchar` into `i64` or a `decimal(10,2)` into `i64`;
 - a key that a relation attribute names (`foreign_key`, `local_key`, `owner_key`, `parent_key`, `related_key`, the pivot keys, `pivot` columns, `pivot_timestamps`, the `through` keys) and the `{name}_type` / `{name}_id` columns of morph relations and `morph_to` fields, when the snapshot has the table they belong in. The macro knows the related model only as a type, so it looks for the related table under the snake_case plural of the type name (`BlogPost` is `blog_posts`) and skips the key when the snapshot has no such table. Keys left to their defaults are not checked, except the morph columns.
 
-The check is skipped without the feature or without the file, so a fresh clone builds as before. Field types the check does not know, such as `#[derive(rustique::Cast)]` types and `rustique::Value`, are only checked for existence. Tables named `schema.table` are not checked.
+The check is skipped without the feature or without the file, so a fresh clone builds as before. Field types the check does not know, such as `#[derive(rustique::Cast)]` types and `rustique::Value`, are only checked for existence.
+
+### Column strings and raw SQL
 
 Column strings for the query builder can go through `rustique::col!`, which expands to the string itself and, with a snapshot, fails to compile when the table is not in it, the table has no such column, or (for a lone `col!("email")`) no table has the column. `col!("users.*")` checks the table only.
 
@@ -278,6 +280,18 @@ let rows = db
 ```
 
 `sql!` reads SQL with a tiny tokenizer, not a parser, so it skips whatever it cannot be sure of rather than fail valid SQL: SQL containing `WITH` or a backslash, quoted and `schema.table` names, `FROM` inside a function call (`EXTRACT(YEAR FROM d)`), `dual`, table functions, aliases (`u.id` with `FROM users u`), unqualified columns, and every table after the first of `FROM a, b`.
+
+### Several databases or schemas
+
+One snapshot describes one database (MySQL) or user (Oracle). For models of another one, write a named snapshot by pointing `--env` at that database:
+
+```bash
+cargo run --bin rustique -- schema:snapshot --name billing --env BILLING_DATABASE_URL
+```
+
+That writes `rustique-schema.billing.txt`, which `#[rustique::model(table = "invoices", schema = "billing")]` reads instead of `rustique-schema.txt`. A model named `table = "billing.invoices"` reads it too, and looks for `invoices` there. Pass the name to the other macros as well: `col!(schema = "billing", "invoices.total")`, `sql!(schema = "billing", "SELECT ...")` and `#[rustique::scopes(schema = "billing")]`. Without that file, those models are not checked.
+
+### In CI
 
 To fail CI on a stale snapshot, migrate a database, run `schema:snapshot` and check that `git diff --exit-code rustique-schema.txt` passes.
 
