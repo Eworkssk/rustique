@@ -342,6 +342,37 @@ impl QueryBuilder {
         .await
     }
 
+    /// Inserts the rows of `source` into this query's table in one
+    /// statement, like Laravel's `insertUsing`: `INSERT INTO table (columns)
+    /// SELECT ...`. The rows never leave the database. Returns how many rows
+    /// were inserted. See [`to_insert_using_sql`](Self::to_insert_using_sql).
+    ///
+    /// ```no_run
+    /// # use rustique::prelude::*;
+    /// # async fn run(db: &Db, ids: Vec<i64>) -> rustique::Result<()> {
+    /// let archived = QueryBuilder::table("orders_archive")
+    ///     .insert_using(
+    ///         db,
+    ///         &["id", "total"],
+    ///         QueryBuilder::table("orders").select(["id", "total"]).where_in("id", ids),
+    ///     )
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// As [`to_insert_using_sql`](Self::to_insert_using_sql), plus database errors.
+    pub async fn insert_using(
+        &self,
+        db: &impl Executor,
+        columns: &[&str],
+        source: Self,
+    ) -> Result<u64> {
+        let compiled = self.to_insert_using_sql(db.dialect(), columns, &source)?;
+        Ok(db.execute(compiled).await?.rows_affected)
+    }
+
     /// Inserts `rows`, updating the `update` columns of rows that clash on
     /// `unique_by`; see [`to_upsert_sql`](Self::to_upsert_sql). The affected
     /// row count is as the database reports it (MySQL counts an updated row twice).

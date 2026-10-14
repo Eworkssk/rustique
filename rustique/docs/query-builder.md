@@ -245,11 +245,27 @@ Each part is parenthesized, so the main query's ordering, limit and offset apply
 let q = QueryBuilder::table("jobs").where_("done", "=", false);
 q.clone().lock_for_update();                 // FOR UPDATE
 q.clone().lock_for_update().skip_locked();   // FOR UPDATE SKIP LOCKED
+q.clone().lock_for_update_no_wait();         // FOR UPDATE NOWAIT
+q.clone().lock_for_update_wait(std::time::Duration::from_secs(5)); // Oracle FOR UPDATE WAIT 5
 q.shared_lock();                             // MySQL FOR SHARE; Error::Unsupported on Oracle
 # Ok(()) }
 ```
 
 Locks only make sense inside a [transaction](database.md). `lock_for_update()` with `first`, `find` or `limit` works on both databases: Oracle, which rejects `FOR UPDATE` after a row limit, locks the rows the limited query picks (`WHERE ROWID IN (...)`). On Oracle that is not possible with joins, grouping or `skip_locked`, which then return `Error::Unsupported`.
+
+`lock_for_update_no_wait()` fails at once, and `lock_for_update_wait(timeout)` after `timeout` (rounded up to whole seconds), when another transaction holds one of the rows. Tell that error apart with `Error::is_lock_timeout()` (MySQL 3572 / 1205, ORA-00054 / ORA-30006):
+
+```rust
+# use rustique::prelude::*;
+# async fn run(tx: &rustique::Transaction) -> rustique::Result<()> {
+match QueryBuilder::table("jobs").where_("id", "=", 1).lock_for_update_no_wait().first(tx).await {
+    Err(e) if e.is_lock_timeout() => { /* someone else is working on it */ }
+    other => { other?; }
+}
+# Ok(()) }
+```
+
+MySQL has no per-statement wait (its `innodb_lock_wait_timeout` is a session setting, see [`session_setup`](getting-started.md#pool-settings-and-tls)), so `lock_for_update_wait` returns `Error::Unsupported` there. Neither database combines `skip_locked` with a wait; that is an `Error::InvalidQuery`.
 
 ## Insert, update, delete
 
@@ -297,6 +313,25 @@ QueryBuilder::table("prices").upsert(
 
 MySQL uses `INSERT ... AS new ON DUPLICATE KEY UPDATE`, Oracle uses `MERGE`. MySQL counts an updated row twice in the returned number.
 
+### Insert from a select
+
+`insert_using` is Laravel's `insertUsing`: `INSERT INTO table (columns) SELECT ...` in one statement, so the rows never travel through the application. It returns how many rows were inserted.
+
+```rust
+# use rustique::prelude::*;
+# async fn run(db: Db, ids: Vec<i64>) -> rustique::Result<()> {
+let copied: u64 = QueryBuilder::table("orders_archive")
+    .insert_using(
+        &db,
+        &["id", "total"],
+        QueryBuilder::table("orders").select(["id", "total"]).where_in("id", ids),
+    )
+    .await?;
+# Ok(()) }
+```
+
+The source query is any `QueryBuilder`, with one selected column per entry of `columns`; with no columns it fills every column of the table in order. `IN` lists over 1,000 integers work as in a plain select (literals on MySQL, one JSON array bind through `JSON_TABLE` on Oracle).
+
 ## Seeing the SQL
 
 ```rust
@@ -309,4 +344,4 @@ compiled.binds;  // Vec<Value>
 # Ok(()) }
 ```
 
-Also `to_insert_sql`, `to_upsert_sql`, `to_update_sql`, `to_delete_sql`. No database needed, good for tests.
+Also `to_insert_sql`, `to_insert_using_sql`, `to_upsert_sql`, `to_update_sql`, `to_delete_sql`. No database needed, good for tests.

@@ -18,11 +18,13 @@ mod writer;
 
 use std::fmt;
 
-pub(crate) use dml::{delete, increment, insert, insert_get_id, insert_get_ids, update, upsert};
+pub(crate) use dml::{
+    delete, increment, insert, insert_get_id, insert_get_ids, insert_using, update, upsert,
+};
 pub(crate) use schema::{blueprint, drop_table, has_table, parse_column_type, rename_table};
 pub(crate) use select::{aggregate, select};
 
-use crate::query::{QueryBuilder, Raw};
+use crate::query::{Lock, QueryBuilder, Raw};
 use crate::{Error, Result, Value};
 use writer::Writer;
 
@@ -37,6 +39,29 @@ pub(crate) fn raw(
     w.finish()
 }
 
+/// `SELECT "SEQ".NEXTVAL AS "ID" FROM DUAL CONNECT BY LEVEL <= :1`: `count`
+/// values of an Oracle sequence in one round trip. MySQL has no sequences.
+pub(crate) fn next_sequence_values(
+    dialect: Dialect,
+    sequence: &str,
+    count: usize,
+) -> Result<Compiled> {
+    let mut w = Writer::new(dialect);
+    if dialect != Dialect::Oracle {
+        w.fail(Error::Unsupported {
+            dialect,
+            feature: "sequences",
+        });
+    }
+    w.push("SELECT ");
+    w.table(sequence);
+    w.push(".NEXTVAL AS ");
+    w.column("id");
+    w.push(" FROM DUAL CONNECT BY LEVEL <= ");
+    w.bind(Value::U64(count as u64));
+    w.finish()
+}
+
 /// Oracle `LOCK TABLE` in exclusive mode, waiting `wait` seconds (`None`:
 /// forever) before ORA-30006.
 pub(crate) fn oracle_lock_table(table: &str, wait: Option<u64>) -> Result<String> {
@@ -47,6 +72,18 @@ pub(crate) fn oracle_lock_table(table: &str, wait: Option<u64>) -> Result<String
         sql.push_str(&format!(" WAIT {wait}"));
     }
     Ok(sql)
+}
+
+/// Appends `SKIP LOCKED`, which neither database combines with `NOWAIT` / `WAIT n`.
+fn lock_wait_or_skip(w: &mut Writer, lock: Lock) {
+    if !lock.skip_locked {
+        return;
+    }
+    if lock.wait.is_some() {
+        let message = "SKIP LOCKED cannot be combined with NOWAIT or WAIT";
+        return w.fail(Error::InvalidQuery(message.to_owned()));
+    }
+    w.push(" SKIP LOCKED");
 }
 
 /// SQL dialect a query is compiled for.
@@ -118,5 +155,22 @@ fn check_query(w: &mut Writer, query: &QueryBuilder) {
     }
     if query.table.is_empty() {
         w.fail(Error::InvalidQuery("query has no table".to_owned()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn next_sequence_values_is_one_oracle_query() {
+        let compiled = next_sequence_values(Dialect::Oracle, "app.orders_seq", 3).unwrap();
+        assert_eq!(
+            compiled.sql,
+            r#"SELECT "APP"."ORDERS_SEQ".NEXTVAL AS "ID" FROM DUAL CONNECT BY LEVEL <= :1"#
+        );
+        assert_eq!(compiled.binds, [Value::U64(3)]);
+        let mysql = next_sequence_values(Dialect::MySql, "orders_seq", 3).unwrap_err();
+        assert!(matches!(mysql, Error::Unsupported { .. }), "{mysql}");
     }
 }

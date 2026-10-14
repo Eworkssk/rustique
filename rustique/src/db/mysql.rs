@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 
 use super::Executed;
 use super::cursor::{Cursor, Sink};
+use super::log::Peer;
 use super::options::{ACQUIRE_TIMEOUT, PoolConfig, acquire_timed_out};
 use crate::grammar::Compiled;
 use crate::{Dialect, Error, Result, Row, Value, ValueError};
@@ -30,6 +31,7 @@ pub(super) struct Pool {
     acquire_timeout: Duration,
     /// See `DbBuilder::keep_sessions_after_raw_sql`.
     keep_sessions: bool,
+    pub peer: Arc<Peer>,
 }
 
 /// The pool for `url`; `mysql_async` connects on first use.
@@ -95,7 +97,14 @@ pub(super) fn pool(url: &str, config: PoolConfig) -> Result<Pool> {
         .setup(config.session_setup.into_iter().rev().collect())
         .into();
 
+    let peer = Arc::new(Peer {
+        dialect: Dialect::MySql,
+        namespace: opts.db_name().map(str::to_owned),
+        address: Some(opts.ip_or_hostname().to_owned()),
+        port: Some(opts.tcp_port()),
+    });
     Ok(Pool {
+        peer,
         pool: mysql_async::Pool::new(opts),
         acquire_timeout: config.acquire_timeout.unwrap_or(ACQUIRE_TIMEOUT),
         keep_sessions: config.keep_sessions,
@@ -183,7 +192,7 @@ pub(super) async fn begin(pool: &Pool) -> Result<Conn> {
     // COM_RESET_CONNECTION on return to the pool rolls back an abandoned transaction.
     conn.reset_connection(true);
     let sql = "START TRANSACTION";
-    super::log::traced(super::log::statement(Dialect::MySql, sql), async {
+    super::log::traced(super::log::statement(&pool.peer, sql), async {
         conn.query_drop(sql).await.map_err(error)
     })
     .await?;
@@ -253,7 +262,7 @@ async fn stream(conn: &mut mysql_async::Conn, query: Compiled, sink: &Sink) -> R
     let mut result = conn.exec_iter(query.sql, params).await.map_err(error)?;
     let columns = Columns::new(result.columns());
     while let Some(row) = result.next().await.map_err(error)? {
-        if sink.send(Ok(columns.row(row)?)).await.is_err() {
+        if !sink.send(columns.row(row)?).await {
             break;
         }
     }

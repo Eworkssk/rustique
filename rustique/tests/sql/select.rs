@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use rustique::{Dialect, QueryBuilder, Value};
 
 use crate::{assert_sql, binds, error};
@@ -99,6 +101,43 @@ fn lock_for_update_skip_locked() {
         "SELECT * FROM `jobs` WHERE `id` = ? FOR UPDATE SKIP LOCKED",
         r#"SELECT * FROM "JOBS" WHERE "ID" = :1 FOR UPDATE SKIP LOCKED"#,
     );
+}
+
+#[test]
+fn lock_for_update_wait_and_no_wait() {
+    let no_wait = QueryBuilder::table("jobs")
+        .where_("id", "=", 1)
+        .lock_for_update_no_wait();
+    assert_sql(
+        &no_wait,
+        "SELECT * FROM `jobs` WHERE `id` = ? FOR UPDATE NOWAIT",
+        r#"SELECT * FROM "JOBS" WHERE "ID" = :1 FOR UPDATE NOWAIT"#,
+    );
+
+    // Rounded up to whole seconds; MySQL has no per-statement wait.
+    let wait = QueryBuilder::table("jobs").lock_for_update_wait(Duration::from_millis(2500));
+    assert_eq!(
+        wait.to_sql(Dialect::Oracle).unwrap().sql,
+        r#"SELECT * FROM "JOBS" FOR UPDATE WAIT 3"#
+    );
+    assert!(error(&wait, Dialect::MySql).contains("does not support FOR UPDATE WAIT"));
+
+    // A limited window keeps the wait on the outer, locking query.
+    let window = QueryBuilder::table("jobs")
+        .order_by("id")
+        .limit(1)
+        .lock_for_update_wait(Duration::from_secs(5));
+    assert!(
+        (window.to_sql(Dialect::Oracle).unwrap().sql)
+            .ends_with(r#"ORDER BY "ID" ASC FOR UPDATE WAIT 5"#)
+    );
+
+    let both = QueryBuilder::table("jobs")
+        .lock_for_update_no_wait()
+        .skip_locked();
+    for dialect in [Dialect::MySql, Dialect::Oracle] {
+        assert!(error(&both, dialect).contains("SKIP LOCKED cannot be combined"));
+    }
 }
 
 #[test]

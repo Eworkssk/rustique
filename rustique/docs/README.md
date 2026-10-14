@@ -6,14 +6,14 @@ The pages follow the layout of the Laravel Eloquent docs, so if you know Laravel
 
 | Page | What it covers |
 |---|---|
-| [Getting started](getting-started.md) | Install, features, connecting (pool, TLS, session setup, lazy connection), the global `Db`, a first model |
-| [Query builder](query-builder.md) | `QueryBuilder`: selects, wheres (dates, JSON), `when`, joins, unions, ordering, aggregates, `value`, insert / update / delete / upsert / increment |
+| [Getting started](getting-started.md) | Install, features, connecting (pool, TLS, session setup, fetch array size, lazy connection), the global `Db`, a first model |
+| [Query builder](query-builder.md) | `QueryBuilder`: selects, wheres (dates, JSON), `when`, joins, unions, ordering, aggregates, `value`, locks (`NOWAIT` / `WAIT n`), insert / `insert_using` / update / delete / upsert / increment |
 | [Models](models.md) | `#[rustique::model]`, renamed columns, UUID / ULID keys, retrieving (`find_many`, `sole`), saving, `first_or_create` / `update_or_create`, `increment`, `refresh`, deleting, timestamps, soft deletes, dirty tracking, mass assignment (`Fill`), bulk insert / upsert, pruning |
 | [Relationships](relationships.md) | `has_one`, `has_many`, `belongs_to`, `belongs_to_many`, `has_many_through`, `has_one_through`, polymorphic (`morph_to_many` too), eager loading and its constraints, N+1 detection, `with_count` / `with_sum` / `with_exists`, `where_has` / `where_has_morph`, pivots (`sync_without_detaching`, `toggle`) and pivot columns |
 | [Casts](casts.md) | `#[derive(rustique::Cast)]`, `FromValue`, `Value`, custom types |
 | [Scopes, hooks and observers](events.md) | `#[rustique::scopes]`, global scopes, `Hooks`, `Observer` |
 | [Pagination, chunking and cursors](large-results.md) | `paginate`, `simple_paginate`, `cursor_paginate`, `chunk`, `chunk_by_id`, `cursor` |
-| [Transactions and raw SQL](database.md) | read replicas, `begin`, `transaction(\|tx\| ...)`, deadlock retries, nested transactions, `rollback_after` for tests, savepoints, `select` / `statement`, errors, query logging |
+| [Transactions and raw SQL](database.md) | read replicas, `begin`, `transaction(\|tx\| ...)`, deadlock retries, nested transactions, `rollback_after` for tests, savepoints, `select` / `statement`, Oracle `next_sequence_values`, errors, query logging (OpenTelemetry span attributes) |
 | [Factories](factories.md) | `HasFactory`, `factory()`, `count`, `state`, `sequence`, `make` / `create`, `has` / `has_attached`, `for_` / `for_factory`, `recycle`, `after_making` / `after_creating` |
 | [Schema and migrations](migrations.md) | `Schema`, `Blueprint`, `change()`, `use_current`, comments, `Migrator` (`fresh`, `reset`, `--step`), seeders, `migrations!`, the CLI, migrations from a schema diff (`make:migration --diff`), the compile-time schema check |
 | [Database differences](dialects.md) | What changes between MySQL and Oracle |

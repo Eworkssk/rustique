@@ -174,9 +174,19 @@ pub(crate) struct Union {
     pub all: bool,
 }
 
-/// `FOR UPDATE | FOR SHARE [SKIP LOCKED]`
+/// `FOR UPDATE | FOR SHARE [SKIP LOCKED | NOWAIT | WAIT n]`
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Lock {
     pub shared: bool,
     pub skip_locked: bool,
+    pub wait: Option<LockWait>,
+}
+
+/// How long a locking read waits for rows another transaction locked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LockWait {
+    /// `NOWAIT`: fail at once.
+    NoWait,
+    /// `WAIT n` (Oracle): fail after `n` seconds.
+    Seconds(u64),
 }

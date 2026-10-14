@@ -101,3 +101,58 @@ fn update_and_delete_reject_limits_and_joins() {
     let joined = QueryBuilder::table("users").join("posts", "posts.user_id", "=", "users.id");
     assert!(joined.to_delete_sql(Dialect::Oracle).is_err());
 }
+
+#[test]
+fn insert_using_a_select() {
+    let source = QueryBuilder::table("orders")
+        .select(["id", "total"])
+        .where_("state", "=", "done");
+    let archive = QueryBuilder::table("archive");
+    let mysql = archive
+        .to_insert_using_sql(Dialect::MySql, &["id", "total"], &source)
+        .unwrap();
+    assert_eq!(
+        mysql.sql,
+        "INSERT INTO `archive` (`id`, `total`) SELECT `id`, `total` FROM `orders` WHERE `state` = ?"
+    );
+    assert_eq!(mysql.binds, [Value::from("done")]);
+    let oracle = archive
+        .to_insert_using_sql(Dialect::Oracle, &[], &source)
+        .unwrap();
+    assert_eq!(
+        oracle.sql,
+        r#"INSERT INTO "ARCHIVE" SELECT "ID", "TOTAL" FROM "ORDERS" WHERE "STATE" = :1"#
+    );
+}
+
+#[test]
+fn insert_using_binds_long_in_lists() {
+    let ids: Vec<i64> = (1..=1500).collect();
+    let source = QueryBuilder::table("orders")
+        .select(["id"])
+        .where_("state", "=", "done")
+        .where_in("id", ids);
+    let oracle = QueryBuilder::table("archive")
+        .to_insert_using_sql(Dialect::Oracle, &["id"], &source)
+        .unwrap();
+    assert_eq!(
+        oracle.sql,
+        r#"INSERT INTO "ARCHIVE" ("ID") SELECT "ID" FROM "ORDERS" WHERE "STATE" = :1 AND "ID" IN (SELECT c0 FROM JSON_TABLE(:2, '$[*]' COLUMNS (c0 NUMBER PATH '$[0]')))"#
+    );
+    assert_eq!(oracle.binds.len(), 2);
+    let mysql = QueryBuilder::table("archive")
+        .to_insert_using_sql(Dialect::MySql, &["id"], &source)
+        .unwrap();
+    assert!(mysql.sql.contains("`id` IN (1, 2, "), "{}", mysql.sql);
+    assert_eq!(mysql.binds, [Value::from("done")]);
+}
+
+#[test]
+fn insert_using_reports_source_mistakes() {
+    let source = QueryBuilder::table("orders").where_("id", "~", 1);
+    let result =
+        QueryBuilder::table("archive").to_insert_using_sql(Dialect::MySql, &["id"], &source);
+    assert!(result.is_err());
+    let no_table = QueryBuilder::default().to_insert_using_sql(Dialect::MySql, &["id"], &source);
+    assert!(no_table.is_err());
+}

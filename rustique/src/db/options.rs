@@ -35,6 +35,8 @@ pub(super) struct PoolConfig {
     pub session_setup: Vec<String>,
     /// See [`DbBuilder::timezone`].
     pub timezone: Option<String>,
+    /// See [`DbBuilder::fetch_array_size`].
+    pub fetch_array_size: Option<u32>,
     #[cfg(feature = "mysql-rustls")]
     pub tls: Option<Tls>,
 }
@@ -151,6 +153,17 @@ impl DbBuilder {
         self
     }
 
+    /// Rows Oracle sends per fetch round trip of a query (ODPI-C's fetch
+    /// array size), default 100. More means fewer round trips for large
+    /// results ([`get`](crate::QueryBuilder::get), [`cursor`](crate::QueryBuilder::cursor),
+    /// chunks), at the cost of a client buffer of `rows` × row width per
+    /// open query. MySQL ignores it: its rows stream as they arrive. A size
+    /// of 0 fails [`connect`](Self::connect) with [`Error::Config`].
+    pub fn fetch_array_size(mut self, rows: u32) -> Self {
+        self.config.fetch_array_size = Some(rows);
+        self
+    }
+
     /// Connects to MySQL over TLS, verifying the server against `tls`.
     /// Oracle takes TLS in the URL instead (`tcps://`, see [`Db::connect`]),
     /// so this fails there with [`Error::Config`].
@@ -210,6 +223,9 @@ impl DbBuilder {
         } = self.config;
         if max_connections == Some(0) {
             return Err(Error::Config("max_connections must be at least 1".into()));
+        }
+        if self.config.fetch_array_size == Some(0) {
+            return Err(Error::Config("fetch_array_size must be at least 1".into()));
         }
         if let (Some(min), Some(max)) = (min_connections, max_connections)
             && min > max
@@ -316,6 +332,8 @@ mod tests {
         assert!(e.contains("at least 1"), "{e}");
         let e = error(Db::builder(URL).min_connections(5).max_connections(2)).await;
         assert!(e.contains("exceeds"), "{e}");
+        let e = error(Db::builder(URL).fetch_array_size(0)).await;
+        assert!(e.contains("fetch_array_size"), "{e}");
     }
 
     #[cfg(all(feature = "mysql-rustls", feature = "oracle"))]

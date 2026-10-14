@@ -17,13 +17,16 @@ mod paginate;
 mod wheres;
 
 pub(crate) use ast::{
-    Aggregate, Clause, Condition, Conjunction, Expr, Join, JoinKind, Lock, Order, Raw, Union,
+    Aggregate, Clause, Condition, Conjunction, Expr, Join, JoinKind, Lock, LockWait, Order, Raw,
+    Union,
 };
 pub use execute::{Chunks, Page, SimplePage};
 pub(crate) use execute::{negate, output_name};
 pub use join::JoinClause;
 pub(crate) use operator::Operator;
 pub use paginate::CursorPage;
+
+use std::time::Duration;
 
 use crate::grammar::{self, Compiled, Dialect};
 use crate::{Result, Value};
@@ -284,6 +287,30 @@ impl QueryBuilder {
         self
     }
 
+    /// Adds `FOR UPDATE WAIT n` (Oracle): fails with a lock timeout (see
+    /// [`Error::is_lock_timeout`](crate::Error::is_lock_timeout)) when the rows
+    /// stay locked by another transaction for `timeout`, rounded up to whole
+    /// seconds. MySQL has no per-statement wait (its `innodb_lock_wait_timeout`
+    /// is a session setting), so compiling for MySQL returns
+    /// [`Error::Unsupported`](crate::Error::Unsupported).
+    pub fn lock_for_update_wait(mut self, timeout: Duration) -> Self {
+        let seconds = timeout.as_secs() + u64::from(timeout.subsec_nanos() > 0);
+        let lock = self.lock.get_or_insert_default();
+        lock.shared = false;
+        lock.wait = Some(LockWait::Seconds(seconds));
+        self
+    }
+
+    /// Adds `FOR UPDATE NOWAIT`: fails with a lock timeout (see
+    /// [`Error::is_lock_timeout`](crate::Error::is_lock_timeout)) instead of
+    /// waiting when another transaction holds any of the rows.
+    pub fn lock_for_update_no_wait(mut self) -> Self {
+        let lock = self.lock.get_or_insert_default();
+        lock.shared = false;
+        lock.wait = Some(LockWait::NoWait);
+        self
+    }
+
     /// Adds `FOR SHARE` (MySQL): other transactions can read the rows but
     /// not change them. Oracle has no row-level shared lock, so compiling
     /// for Oracle returns [`Error::Unsupported`](crate::Error::Unsupported).
@@ -293,7 +320,10 @@ impl QueryBuilder {
     }
 
     /// Adds `SKIP LOCKED`, to `FOR UPDATE` unless [`shared_lock`](Self::shared_lock)
-    /// is used.
+    /// is used. It cannot be combined with a wait
+    /// ([`lock_for_update_no_wait`](Self::lock_for_update_no_wait) /
+    /// [`lock_for_update_wait`](Self::lock_for_update_wait)): compiling fails
+    /// with [`Error::InvalidQuery`](crate::Error::InvalidQuery).
     pub fn skip_locked(mut self) -> Self {
         self.lock.get_or_insert_default().skip_locked = true;
         self
@@ -325,6 +355,24 @@ impl QueryBuilder {
         rows: Vec<Vec<Value>>,
     ) -> Result<Compiled> {
         grammar::insert(dialect, &self.table, columns, rows)
+    }
+
+    /// Compiles `INSERT INTO table (columns) SELECT ...`, the rows of
+    /// `source` inserted into this query's table, one `source` column per
+    /// entry of `columns`. Without columns, `source` fills every column of
+    /// the table in its order.
+    ///
+    /// # Errors
+    ///
+    /// As [`to_sql`](Self::to_sql) for `source`, plus
+    /// [`Error::InvalidQuery`](crate::Error::InvalidQuery) when this query has no table.
+    pub fn to_insert_using_sql(
+        &self,
+        dialect: Dialect,
+        columns: &[&str],
+        source: &Self,
+    ) -> Result<Compiled> {
+        grammar::insert_using(dialect, &self.table, columns, source)
     }
 
     /// Compiles an upsert of `rows`: rows that clash with an existing row on

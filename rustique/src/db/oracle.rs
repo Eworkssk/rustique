@@ -17,6 +17,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::Executed;
 use super::cursor::{Cursor, Sink};
+use super::log::Peer;
 use super::options::{ACQUIRE_TIMEOUT, PoolConfig, acquire_timed_out};
 use crate::grammar::Compiled;
 use crate::{Dialect, Error, Result, Row, Value, ValueError};
@@ -33,6 +34,9 @@ pub(super) struct Pool {
     acquire_timeout: Duration,
     /// See `DbBuilder::keep_sessions_after_raw_sql`.
     keep_sessions: bool,
+    /// See `DbBuilder::fetch_array_size`.
+    fetch: Option<u32>,
+    pub peer: Arc<Peer>,
 }
 
 /// The ODPI-C session pool, created on first use, so a lazy `Db` neither
@@ -55,6 +59,7 @@ impl Pool {
             ));
         }
         let config = Config::parse(url)?;
+        let peer = Arc::new(config.peer());
         let max = settings.max_connections.unwrap_or(MAX_CONNECTIONS);
         if let Some(min) = settings.min_connections
             && min > max
@@ -65,6 +70,7 @@ impl Pool {
         }
         let acquire_timeout = settings.acquire_timeout.unwrap_or(ACQUIRE_TIMEOUT);
         let keep_sessions = settings.keep_sessions;
+        let fetch = settings.fetch_array_size;
         Ok(Self {
             sessions: Arc::new(Sessions {
                 config,
@@ -76,6 +82,8 @@ impl Pool {
             permits: Arc::new(Semaphore::new(max as usize)),
             acquire_timeout,
             keep_sessions,
+            fetch,
+            peer,
         })
     }
 
@@ -131,7 +139,8 @@ impl Pool {
         f: impl FnMut(Row) -> Result<T> + Send + 'static,
     ) -> Result<Vec<T>> {
         let discard = raw && !self.keep_sessions && changes_session(&query.sql);
-        self.run(discard, move |conn| fetch_all(conn, &query, f))
+        let fetch = self.fetch;
+        self.run(discard, move |conn| fetch_all(conn, &query, fetch, f))
             .await
     }
 
@@ -149,7 +158,7 @@ impl Pool {
             blocking(move || {
                 let _permit = permit;
                 let conn = autocommit(pool.sessions.get()?, true);
-                stream(&conn, &query, &sink)
+                stream(&conn, &query, pool.fetch, &sink)
             })
             .await
         })
@@ -159,6 +168,7 @@ impl Pool {
         let permit = self.permit().await?;
         let sessions = Arc::clone(&self.sessions);
         let keep = self.keep_sessions;
+        let fetch = self.fetch;
         blocking(move || {
             // Oracle starts the transaction with the first statement.
             let conn = autocommit(sessions.get()?, false);
@@ -167,6 +177,7 @@ impl Pool {
                 lock: Mutex::new(()),
                 changed: AtomicBool::new(false),
                 keep,
+                fetch,
                 permit: Some(permit),
             })))
         })
@@ -252,6 +263,8 @@ struct Session {
     changed: AtomicBool,
     /// `DbBuilder::keep_sessions_after_raw_sql`: never set `changed`.
     keep: bool,
+    /// `DbBuilder::fetch_array_size`.
+    fetch: Option<u32>,
     /// Released after `conn` goes back to the pool (fields drop in order), or
     /// is dropped.
     permit: Option<OwnedSemaphorePermit>,
@@ -296,7 +309,9 @@ impl Conn {
         query: Compiled,
         f: impl FnMut(Row) -> Result<T> + Send + 'static,
     ) -> Result<Vec<T>> {
-        self.run(move |conn| fetch_all(conn, &query, f)).await
+        let fetch = self.0.fetch;
+        self.run(move |conn| fetch_all(conn, &query, fetch, f))
+            .await
     }
 
     pub async fn execute(&self, query: Compiled) -> Result<Executed> {
@@ -309,7 +324,7 @@ impl Conn {
         let session = Arc::clone(&self.0);
         Cursor::spawn_blocking(buffer, move |sink| {
             let _guard = lock(&session.lock)?;
-            stream(&session.conn, &query, sink)
+            stream(&session.conn, &query, session.fetch, sink)
         })
     }
 
@@ -451,9 +466,11 @@ fn error(e: oracle::Error) -> Error {
 }
 
 /// The rows of `query`, each turned into a `T` by `f` as it arrives.
+/// `fetch`: rows per round trip, ODPI-C's default (100) for `None`.
 fn fetch_all<T>(
     conn: &Connection,
     query: &Compiled,
+    fetch: Option<u32>,
     mut f: impl FnMut(Row) -> Result<T>,
 ) -> Result<Vec<T>> {
     if query.returning > 0 {
@@ -461,7 +478,7 @@ fn fetch_all<T>(
     }
     let mut out = Vec::new();
     let mut failed = None;
-    for_each_row(conn, query, |row| match f(row) {
+    for_each_row(conn, query, fetch, |row| match f(row) {
         Ok(value) => {
             out.push(value);
             true
@@ -493,14 +510,23 @@ fn fetch_out_binds(conn: &Connection, query: &Compiled) -> Result<Vec<Row>> {
 }
 
 /// Sends the rows of `query` to `sink` until they run out or the cursor is dropped.
-fn stream(conn: &Connection, query: &Compiled, sink: &Sink) -> Result<()> {
-    for_each_row(conn, query, |row| sink.blocking_send(Ok(row)).is_ok())
+fn stream(conn: &Connection, query: &Compiled, fetch: Option<u32>, sink: &Sink) -> Result<()> {
+    for_each_row(conn, query, fetch, |row| sink.blocking_send(row))
 }
 
 /// Runs `query` and passes each row to `f`, stopping when it returns `false`.
-fn for_each_row(conn: &Connection, query: &Compiled, mut f: impl FnMut(Row) -> bool) -> Result<()> {
+fn for_each_row(
+    conn: &Connection,
+    query: &Compiled,
+    fetch: Option<u32>,
+    mut f: impl FnMut(Row) -> bool,
+) -> Result<()> {
     let params: Vec<&dyn ToSql> = query.binds.iter().map(|v| v as &dyn ToSql).collect();
-    let mut statement = conn.statement(&query.sql).build().map_err(error)?;
+    let mut builder = conn.statement(&query.sql);
+    if let Some(rows) = fetch {
+        builder.fetch_array_size(rows);
+    }
+    let mut statement = builder.build().map_err(error)?;
     let rows = statement.query(&params).map_err(error)?;
     let names: Arc<[String]> = rows
         .column_info()
@@ -729,6 +755,31 @@ impl Config {
     }
 }
 
+impl Config {
+    /// Host, port and service of the connect string: `//host:port/service`,
+    /// `tcps://host:2484/service?...`.
+    fn peer(&self) -> Peer {
+        let address = (self.connect.split_once("//").map_or("", |(_, rest)| rest))
+            .split(['?', '&'])
+            .next()
+            .unwrap_or_default();
+        let (server, service) = address.split_once('/').unwrap_or((address, ""));
+        // `[::1]:1521` or `host:1521`
+        let (host, port) = match server.rsplit_once(':') {
+            Some((host, port)) if !port.contains(']') => (host, port.parse().ok()),
+            _ => (server, None),
+        };
+        let host = host.trim_start_matches('[').trim_end_matches(']');
+        let some = |text: &str| (!text.is_empty()).then(|| text.to_owned());
+        Peer {
+            dialect: Dialect::Oracle,
+            namespace: some(service.split(':').next().unwrap_or_default()),
+            address: some(host),
+            port,
+        }
+    }
+}
+
 fn percent_decode(text: &str) -> Result<String> {
     let invalid = || Error::Config("invalid percent-encoding in Oracle URL credentials".to_owned());
     let mut bytes = Vec::with_capacity(text.len());
@@ -774,6 +825,28 @@ mod tests {
             config.connect,
             "tcps://db.local:2484/ORCLPDB1?wallet_location=/w"
         );
+    }
+
+    #[test]
+    fn peer_of_connect_strings() {
+        let peer = |url| {
+            let peer = Config::parse(url).unwrap().peer();
+            (peer.address, peer.port, peer.namespace)
+        };
+        let some = |s: &str| Some(s.to_owned());
+        assert_eq!(
+            peer("oracle://a:b@db.local:1521/ORCLPDB1"),
+            (some("db.local"), Some(1521), some("ORCLPDB1"))
+        );
+        assert_eq!(
+            peer("oracle://a:b@tcps://db.local:2484/SVC?wallet_location=/w"),
+            (some("db.local"), Some(2484), some("SVC"))
+        );
+        assert_eq!(
+            peer("oracle://a:b@[::1]:1521/SVC"),
+            (some("::1"), Some(1521), some("SVC"))
+        );
+        assert_eq!(peer("oracle://a:b@db"), (some("db"), None, None));
     }
 
     #[test]

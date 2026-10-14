@@ -1,7 +1,8 @@
 //! [`Cursor`]: rows streamed one at a time from a background task.
 
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -13,8 +14,52 @@ use crate::{Result, Row};
 /// network fetch.
 pub(crate) const BUFFER: usize = 100;
 
-/// Where a driver task sends rows; a send fails once the [`Cursor`] is dropped.
-pub(super) type Sink = mpsc::Sender<Result<Row>>;
+/// Where a driver task sends rows, counting them for the query's span.
+#[derive(Clone)]
+pub(super) struct Sink {
+    rows: mpsc::Sender<Result<Row>>,
+    sent: Arc<AtomicU64>,
+}
+
+impl Sink {
+    /// Sends `row`; `false` once the [`Cursor`] is dropped.
+    #[cfg(feature = "mysql")]
+    pub async fn send(&self, row: Row) -> bool {
+        let sent = self.rows.send(Ok(row)).await.is_ok();
+        self.sent.fetch_add(u64::from(sent), Ordering::Relaxed);
+        sent
+    }
+
+    /// As [`send`](Self::send), from a blocking thread.
+    #[cfg(feature = "oracle")]
+    pub fn blocking_send(&self, row: Row) -> bool {
+        let sent = self.rows.blocking_send(Ok(row)).is_ok();
+        self.sent.fetch_add(u64::from(sent), Ordering::Relaxed);
+        sent
+    }
+
+    /// Records the rows sent so far on `span`: all of them once the stream
+    /// ends, or those read before the cursor was dropped or failed.
+    fn record(&self, span: &Span) {
+        span.record(
+            "db.response.returned_rows",
+            self.sent.load(Ordering::Relaxed),
+        );
+    }
+
+    /// Ends the stream with `error`, marking `span` failed.
+    async fn fail(&self, span: &Span, error: crate::Error) {
+        super::log::fail(span, &error);
+        let _ = self.rows.send(Err(error)).await; // the cursor may be gone
+    }
+}
+
+/// A sink and the receiving end for a [`Cursor`].
+fn channel(buffer: usize) -> (Sink, mpsc::Receiver<Result<Row>>) {
+    let (rows, receiver) = mpsc::channel(buffer.max(1));
+    let sent = Arc::default();
+    (Sink { rows, sent }, receiver)
+}
 
 /// Rows of a query, streamed instead of collected, from
 /// [`QueryBuilder::cursor`](crate::QueryBuilder::cursor). Call
@@ -50,14 +95,16 @@ impl<'a> Cursor<'a> {
     {
         use tracing::Instrument;
 
-        let (sink, rows) = mpsc::channel(buffer.max(1));
+        let (sink, rows) = channel(buffer);
         let errors = sink.clone();
         let stream = stream(sink);
         let task = tokio::spawn(
             async move {
-                if let Err(error) = stream.await {
-                    super::log::fail(&Span::current(), &error);
-                    let _ = errors.send(Err(error)).await; // the cursor may be gone
+                let result = stream.await;
+                let span = Span::current();
+                errors.record(&span);
+                if let Err(error) = result {
+                    errors.fail(&span, error).await;
                 }
             }
             // The query's span, entered by the caller; it lasts as long as the rows.
@@ -72,13 +119,15 @@ impl<'a> Cursor<'a> {
         buffer: usize,
         stream: impl FnOnce(&Sink) -> Result<()> + Send + 'static,
     ) -> Self {
-        let (sink, rows) = mpsc::channel(buffer.max(1));
+        let (sink, rows) = channel(buffer);
         let span = Span::current(); // as in `spawn`
         let task = tokio::task::spawn_blocking(move || {
             let span = span.entered();
-            if let Err(error) = stream(&sink) {
+            let result = stream(&sink);
+            sink.record(&span);
+            if let Err(error) = result {
                 super::log::fail(&span, &error);
-                let _ = sink.blocking_send(Err(error));
+                let _ = sink.rows.blocking_send(Err(error)); // the cursor may be gone
             }
         });
         Self::new(rows, task)

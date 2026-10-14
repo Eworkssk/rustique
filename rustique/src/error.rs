@@ -139,6 +139,28 @@ impl Error {
         )
     }
 
+    /// Whether a locking read gave up on rows another transaction holds:
+    /// [`lock_for_update_no_wait`](crate::QueryBuilder::lock_for_update_no_wait)
+    /// found them locked or [`lock_for_update_wait`](crate::QueryBuilder::lock_for_update_wait)
+    /// ran out of time. MySQL 3572 (`NOWAIT`) / 1205 (`innodb_lock_wait_timeout`),
+    /// Oracle ORA-00054 (`NOWAIT`) / ORA-30006 (`WAIT n`).
+    #[must_use]
+    pub fn is_lock_timeout(&self) -> bool {
+        match self {
+            Self::Database {
+                dialect: Dialect::MySql,
+                code: Some(code),
+                ..
+            } => matches!(code, 1205 | 3572),
+            Self::Database {
+                dialect: Dialect::Oracle,
+                code: Some(code),
+                ..
+            } => matches!(code, 54 | 30006),
+            _ => false,
+        }
+    }
+
     /// Whether this is a deadlock, lock wait timeout or serialization
     /// failure: the database gave up on the transaction because of a
     /// concurrent one, and running it again may succeed. MySQL 1213 / 1205,
@@ -158,5 +180,29 @@ impl Error {
             } => matches!(code, 60 | 8177),
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lock_timeouts() {
+        let error = |dialect, code| Error::Database {
+            dialect,
+            code: Some(code),
+            message: String::new(),
+        };
+        for (dialect, code) in [
+            (Dialect::MySql, 3572),
+            (Dialect::MySql, 1205),
+            (Dialect::Oracle, 54),
+            (Dialect::Oracle, 30006),
+        ] {
+            assert!(error(dialect, code).is_lock_timeout(), "{dialect} {code}");
+        }
+        assert!(!error(Dialect::Oracle, 3572).is_lock_timeout());
+        assert!(!error(Dialect::MySql, 1213).is_lock_timeout());
     }
 }

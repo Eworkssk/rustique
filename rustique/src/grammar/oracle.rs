@@ -6,7 +6,7 @@
 
 use super::dml;
 use super::writer::Writer;
-use crate::query::{Lock, QueryBuilder};
+use crate::query::{Lock, LockWait, QueryBuilder};
 use crate::schema::{Column, ColumnType};
 use crate::{Dialect, Error, Result, Value};
 
@@ -71,9 +71,15 @@ pub(super) fn lock(w: &mut Writer, lock: Lock, limited: bool) {
         });
     }
     w.push(" FOR UPDATE");
-    if lock.skip_locked {
-        w.push(" SKIP LOCKED");
+    match lock.wait {
+        Some(LockWait::Seconds(seconds)) => {
+            w.push(" WAIT ");
+            w.push_u64(seconds);
+        }
+        Some(LockWait::NoWait) => w.push(" NOWAIT"),
+        None => {}
     }
+    super::lock_wait_or_skip(w, lock);
 }
 
 /// `INSERT INTO t ("ID", "A") VALUES ("T_SEQ".NEXTVAL, :1) RETURNING "ID" INTO :2`,

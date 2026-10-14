@@ -25,7 +25,7 @@ You write one query; the grammar compiles it per database. Things you can see fr
 
 - Unquoted Oracle names fold to uppercase, so the grammar uppercases and quotes every identifier. Keep lowercase names in Rust; `Row` lookup is case-insensitive. Tables created with quoted lowercase names will not match.
 - Needs Oracle Instant Client (`libclntsh`) at runtime. Calls run in `spawn_blocking`.
-- Legacy sequence keys: `#[rustique(primary_key, sequence = "SEQ")]`, see [Models](models.md#primary-keys).
+- Legacy sequence keys: `#[rustique(primary_key, sequence = "SEQ")]`, see [Models](models.md#primary-keys). `db.next_sequence_values("SEQ", n)` reserves `n` values in one query, see [Oracle sequences](database.md#oracle-sequences).
 - Text and binary values over 32,767 bytes are bound as `CLOB` / `BLOB`, so they also work in `upsert` (`MERGE`), not only in `INSERT`.
 - `UNION` cannot compare `CLOB` columns (ORA-00932); use `union_all` for tables with `CLOB` / JSON columns.
 - Test against real 19c. Oracle 21c XE and 23ai accept SQL that 19c rejects.

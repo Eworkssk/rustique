@@ -1,6 +1,7 @@
 //! [`Transaction`] and [`Savepoint`].
 
 use std::future::Future;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 #[cfg(feature = "mysql")]
@@ -19,6 +20,8 @@ use crate::{BoxFuture, Dialect, Error, Result, Row, Value};
 #[must_use = "a transaction rolls back unless committed"]
 pub struct Transaction {
     conn: Conn,
+    /// The database, for statement spans.
+    peer: Arc<log::Peer>,
     savepoints: AtomicU32,
     /// A [`Cursor`] on this transaction is still reading.
     cursor_open: AtomicBool,
@@ -40,9 +43,10 @@ pub struct Savepoint {
 }
 
 impl Transaction {
-    pub(super) fn new(conn: Conn) -> Self {
+    pub(super) fn new(conn: Conn, peer: Arc<log::Peer>) -> Self {
         Self {
             conn,
+            peer,
             savepoints: AtomicU32::new(0),
             cursor_open: AtomicBool::new(false),
             finished: false,
@@ -168,7 +172,7 @@ impl Transaction {
     /// Runs a transaction-control statement (no bindings).
     async fn run(&self, sql: &str) -> Result<()> {
         self.idle()?;
-        log::traced(log::statement(self.dialect(), sql), async {
+        log::traced(log::statement(&self.peer, sql), async {
             match &self.conn {
                 #[cfg(feature = "mysql")]
                 Conn::MySql(conn) => conn.control(sql).await,
@@ -256,7 +260,7 @@ impl Executor for Transaction {
         f: impl FnMut(Row) -> Result<T> + Send + 'static,
     ) -> Result<Vec<T>> {
         self.idle()?;
-        log::logged(self.dialect(), query, |query| async move {
+        log::logged(&self.peer, query, |query| async move {
             match &self.conn {
                 #[cfg(feature = "mysql")]
                 Conn::MySql(conn) => conn.fetch_all(query, f).await,
@@ -269,7 +273,7 @@ impl Executor for Transaction {
 
     async fn execute(&self, query: Compiled) -> Result<Executed> {
         self.idle()?;
-        log::logged(self.dialect(), query, |query| async move {
+        log::logged(&self.peer, query, |query| async move {
             match &self.conn {
                 #[cfg(feature = "mysql")]
                 Conn::MySql(conn) => conn.execute(query).await,
@@ -285,7 +289,7 @@ impl Executor for Transaction {
             return Cursor::failed(self.idle().unwrap_err());
         }
         // Entered while the driver spawns its task, which `Cursor` instruments with it.
-        let _span = log::statement(self.dialect(), &query.sql).entered();
+        let _span = log::statement(&self.peer, &query.sql).entered();
         let mut cursor = match &self.conn {
             #[cfg(feature = "mysql")]
             Conn::MySql(conn) => conn.cursor(query, buffer),

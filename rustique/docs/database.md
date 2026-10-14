@@ -292,6 +292,21 @@ if db.dialect() == Dialect::Oracle { /* ... */ }
 
 Also on `Executor`: `fetch_all(Compiled)`, `execute(Compiled)`, `execute_all(Vec<Compiled>)` (all in one transaction or savepoint), `cursor(Compiled)`.
 
+### Oracle sequences
+
+`next_sequence_values(sequence, count)` reserves `count` values of an Oracle sequence in one round trip (`SELECT "SEQ".NEXTVAL FROM DUAL CONNECT BY LEVEL <= :1`), for keys the application assigns before inserting, such as parent and child rows written together:
+
+```rust
+# use rustique::prelude::*;
+# async fn run(db: Db) -> rustique::Result<()> {
+let ids: Vec<i64> = db.next_sequence_values("orders_seq", 500).await?;
+# Ok(()) }
+```
+
+- The values are unique, but not necessarily consecutive or ascending (sequence cache, RAC).
+- It always runs on the main database, never a read replica. A schema-qualified name (`"app.orders_seq"`) works; `count` 0 returns no values without a query.
+- MySQL has no sequences: `Error::Unsupported`.
+
 ## Errors
 
 Everything returns `rustique::Result<T>` = `Result<T, rustique::Error>`:
@@ -300,7 +315,7 @@ Everything returns `rustique::Result<T>` = `Result<T, rustique::Error>`:
 |---|---|
 | `NotFound(table)` | `find_or_fail`, `first_or_fail`, `sole` |
 | `MultipleRecords(table)` | `sole` found more than one row |
-| `Database { code, message }` | the server refused. `code` is native: MySQL `1062`, Oracle `1` (ORA-00001) for unique violations. `is_concurrency_error()` spots deadlocks |
+| `Database { code, message }` | the server refused. `code` is native: MySQL `1062`, Oracle `1` (ORA-00001) for unique violations. `is_concurrency_error()` spots deadlocks, `is_lock_timeout()` a `NOWAIT` / `WAIT n` lock that gave up |
 | `Decode { model, column, .. }` | a column does not fit the field type; `model` is the table when building a model (the message reads `` `users.age` ``) |
 | `RelationNotLoaded` | `rel.loaded()` before loading |
 | `UnknownRelation { .. }` | a `with` / `where_has` / `with_count` name that does not exist |
@@ -332,7 +347,11 @@ Every statement goes through `tracing`, target `rustique::query`:
 
 - `DEBUG`: SQL, duration, row count.
 - `TRACE`: bindings.
-- An `INFO` span `rustique.query` per statement with OpenTelemetry attributes (`db.system`, `db.statement`, `otel.kind = "client"`, ...), ready for `tracing-opentelemetry`.
+- An `INFO` span `rustique.query` per statement with OpenTelemetry attributes, ready for `tracing-opentelemetry`:
+  - `db.system`, `db.statement`, `otel.name` (the first SQL word), `otel.kind = "client"`.
+  - `db.namespace` (MySQL database, Oracle service name), `server.address` and `server.port` of the pool the statement ran on (a replica's for reads sent there).
+  - `db.operation.batch.size`: rows of an Oracle array-bound insert or upsert (only when 2 or more).
+  - `db.response.returned_rows` for queries, `rustique.rows_affected` for statements (OpenTelemetry has no attribute for affected rows), once the statement succeeds. A cursor's span gets `db.response.returned_rows` when its rows run out, or, if it is dropped or fails early, the rows read from the database until then (read-ahead included).
 
 ```bash
 RUST_LOG=rustique::query=debug cargo run

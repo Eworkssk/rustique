@@ -121,6 +121,41 @@ pub trait Executor: Sync + sealed::Sealed {
         queries: Vec<Compiled>,
     ) -> impl Future<Output = Result<Vec<Vec<Row>>>> + Send;
 
+    /// The next `count` values of the Oracle sequence `sequence` (`"seq"` or
+    /// `"schema.seq"`), in one round trip, for keys an application assigns
+    /// itself before inserting, such as parent and child rows inserted
+    /// together. The values are unique but need not be consecutive or in
+    /// order (sequence caching, RAC). Always runs on the main database,
+    /// never a read replica. A `count` of 0 returns no values without a query.
+    ///
+    /// ```no_run
+    /// # use rustique::prelude::*;
+    /// # async fn run(db: &Db) -> rustique::Result<()> {
+    /// let ids = db.next_sequence_values("orders_seq", 500).await?;
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] on MySQL, which has no sequences;
+    /// [`Error::Database`] when the sequence does not exist.
+    fn next_sequence_values(
+        &self,
+        sequence: &str,
+        count: usize,
+    ) -> impl Future<Output = Result<Vec<i64>>> + Send {
+        let compiled = grammar::next_sequence_values(self.dialect(), sequence, count);
+        async move {
+            let query = compiled?;
+            if count == 0 {
+                return Ok(Vec::new());
+            }
+            // `NEXTVAL` writes: never on a replica.
+            let primary = self.erase().on_writer();
+            primary.fetch_map(query, |row| row.get("id")).await
+        }
+    }
+
     /// This executor as an [`AnyExecutor`].
     #[doc(hidden)]
     fn erase(&self) -> AnyExecutor<'_>;
@@ -337,6 +372,16 @@ impl Pool {
             Self::Oracle(pool) => pool.open().await,
         }
     }
+
+    /// The database this pool connects to, for statement spans.
+    fn peer(&self) -> &Arc<log::Peer> {
+        match self {
+            #[cfg(feature = "mysql")]
+            Self::MySql(pool) => &pool.peer,
+            #[cfg(feature = "oracle")]
+            Self::Oracle(pool) => &pool.peer,
+        }
+    }
 }
 
 impl Db {
@@ -461,7 +506,7 @@ impl Db {
         raw: bool,
         f: impl FnMut(Row) -> Result<T> + Send + 'static,
     ) -> Result<Vec<T>> {
-        log::logged(self.dialect(), query, |query| async move {
+        log::logged(pool.peer(), query, |query| async move {
             match pool {
                 #[cfg(feature = "mysql")]
                 Pool::MySql(pool) => {
@@ -480,7 +525,7 @@ impl Db {
     /// [`Executor::execute`]; `raw` as for [`fetch_from`](Self::fetch_from).
     async fn execute_raw(&self, query: Compiled, raw: bool) -> Result<Executed> {
         self.wrote();
-        log::logged(self.dialect(), query, |query| async move {
+        log::logged(self.pool.peer(), query, |query| async move {
             match &self.pool {
                 #[cfg(feature = "mysql")]
                 Pool::MySql(pool) => mysql::checkout_for(pool, raw).await?.execute(query).await,
@@ -493,7 +538,7 @@ impl Db {
 
     fn cursor_from(&self, pool: &Pool, query: Compiled, buffer: usize) -> Cursor<'_> {
         // Entered while the driver spawns its task, which `Cursor` instruments with it.
-        let _span = log::statement(self.dialect(), &query.sql).entered();
+        let _span = log::statement(pool.peer(), &query.sql).entered();
         match pool {
             #[cfg(feature = "mysql")]
             Pool::MySql(pool) => mysql::cursor(pool, query, buffer),
@@ -547,7 +592,7 @@ impl Db {
             #[cfg(feature = "oracle")]
             Pool::Oracle(pool) => transaction::Conn::Oracle(pool.begin().await?),
         };
-        Ok(Transaction::new(conn))
+        Ok(Transaction::new(conn, Arc::clone(self.pool.peer())))
     }
 
     /// Runs `f` in a transaction: commits when it returns `Ok`, rolls back

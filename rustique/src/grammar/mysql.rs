@@ -2,9 +2,9 @@
 
 use super::dml;
 use super::writer::Writer;
-use crate::query::Lock;
+use crate::query::{Lock, LockWait};
 use crate::schema::ColumnType;
-use crate::{Result, Value};
+use crate::{Dialect, Error, Result, Value};
 
 pub(super) const TABLE_ALIAS: &str = " AS ";
 
@@ -41,9 +41,15 @@ pub(super) fn lock(w: &mut Writer, lock: Lock) {
     } else {
         " FOR UPDATE"
     });
-    if lock.skip_locked {
-        w.push(" SKIP LOCKED");
+    match lock.wait {
+        Some(LockWait::Seconds(_)) => w.fail(Error::Unsupported {
+            dialect: Dialect::MySql,
+            feature: "FOR UPDATE WAIT (set the session's innodb_lock_wait_timeout instead)",
+        }),
+        Some(LockWait::NoWait) => w.push(" NOWAIT"),
+        None => {}
     }
+    super::lock_wait_or_skip(w, lock);
 }
 
 /// `INSERT INTO t (a, b) VALUES (?, ?), (?, ?)`

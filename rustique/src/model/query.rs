@@ -372,6 +372,8 @@ impl<M: Model> Query<M> {
         offset(offset: u64);
         for_page(page: u64, per_page: u64);
         lock_for_update();
+        lock_for_update_wait(timeout: std::time::Duration);
+        lock_for_update_no_wait();
         shared_lock();
         skip_locked();
     }

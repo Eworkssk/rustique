@@ -1,7 +1,7 @@
 //! INSERT, UPDATE and DELETE statements.
 
 use super::writer::Writer;
-use super::{Compiled, Dialect, check_query, conditions, mysql, oracle};
+use super::{Compiled, Dialect, check_query, conditions, mysql, oracle, select};
 use crate::query::QueryBuilder;
 use crate::{Error, Result, Value};
 
@@ -21,6 +21,31 @@ pub(crate) fn insert(
         )),
         Dialect::Oracle => oracle::insert(&mut w, table, columns, rows),
     }
+    w.finish()
+}
+
+/// `INSERT INTO t (a, b) SELECT ...`, like Laravel's `insertUsing`; without
+/// columns, `INSERT INTO t SELECT ...` fills every column in table order.
+/// The source's bindings follow the target's, so its `IN` lists (Oracle's
+/// JSON array included) work as in a plain `SELECT`.
+pub(crate) fn insert_using(
+    dialect: Dialect,
+    table: &str,
+    columns: &[&str],
+    source: &QueryBuilder,
+) -> Result<Compiled> {
+    let mut w = Writer::new(dialect);
+    if table.is_empty() {
+        w.fail(Error::InvalidQuery("insert needs a table".to_owned()));
+    }
+    w.push("INSERT INTO ");
+    if columns.is_empty() {
+        w.table(table);
+    } else {
+        target(&mut w, table, columns);
+    }
+    w.push(" ");
+    select::write(&mut w, source);
     w.finish()
 }
 

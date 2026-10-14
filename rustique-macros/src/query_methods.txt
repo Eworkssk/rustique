@@ -32,6 +32,8 @@ left_join_sub
 left_join_with
 limit
 lock_for_update
+lock_for_update_no_wait
+lock_for_update_wait
 max
 min
 offset

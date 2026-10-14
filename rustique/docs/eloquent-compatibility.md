@@ -53,7 +53,8 @@ Checked against the code on 2026-10-11, after the parity pass that closed the ga
 | chunk, chunkById, lazy, lazyById, cursor | `chunk`, `chunk_by_id`, `cursor` | Have |
 | paginate, simplePaginate, cursorPaginate | same names | Have |
 | sole, find, findMany, whereKey | `sole`, `find`, `find_many`, `where_key`, `where_keys` | Have; `sole` on model queries only |
-| locks | `lock_for_update`, `shared_lock`, `skip_locked` | Have |
+| locks | `lock_for_update`, `shared_lock`, `skip_locked`, plus `lock_for_update_no_wait`, `lock_for_update_wait` | Have; `wait` on Oracle only |
+| insertUsing | `insert_using` | Have |
 
 ## Transactions and database
 

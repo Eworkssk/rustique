@@ -71,6 +71,7 @@ let db = Db::builder(&url)
     .idle_timeout(Duration::from_secs(300))    // close idle ones beyond the minimum
     .max_lifetime(Duration::from_secs(3600))   // recycle old connections
     .session_setup(["SET SESSION max_execution_time = 25000"]) // on every new connection
+    .fetch_array_size(500)                     // Oracle rows per fetch round trip, default 100
     .tls(rustique::Tls::new()                       // MySQL only
         .root_cert("/etc/ssl/mysql/ca.pem")    // private or cloud CA, also trusted
         .client_identity("/etc/ssl/mysql/client-cert.pem", "/etc/ssl/mysql/client-key.pem"))
@@ -82,6 +83,7 @@ let db = Db::builder(&url)
 - `Tls::new()` alone verifies the server against the system's root certificates. `Tls::danger_accept_invalid_certs()` skips verification, for a local server with a self-signed certificate only.
 - Oracle TLS stays in the URL (`tcps://` plus a wallet); `.tls(...)` on an Oracle URL is an `Error::Config`.
 - `.session_setup([...])` runs its SQL on every new connection before the first query: `SET SESSION ...` on MySQL, `ALTER SESSION SET ...` (NLS formats, time zone) on Oracle. MySQL runs it again after each connection reset, and Oracle on the new session that replaces a dropped one, so the settings hold for every query; see [session state](database.md#session-state). A failing statement fails the query that opened the connection.
+- `.fetch_array_size(n)` sets how many rows Oracle sends per fetch round trip (ODPI-C's fetch array size, default 100), for every query of the pool: `get`, chunks and cursors. Raise it for large results, where round trips dominate; each open query buffers `n` rows on the client. MySQL ignores it, since its rows stream as they arrive. 0 is an `Error::Config`.
 - `.keep_sessions_after_raw_sql()` returns connections that ran raw SQL to the pool without a reset (MySQL) or a new session (Oracle, about 25 ms per PL/SQL call). Only for apps whose raw SQL leaves no session state; see [session state](database.md#session-state).
 
 ### Lazy connection

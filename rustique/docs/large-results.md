@@ -105,7 +105,7 @@ while let Some(user) = cursor.next().await? {
 # Ok(()) }
 ```
 
-- A background task reads up to 100 rows ahead on its own connection (or on the transaction's, which the cursor then borrows). `cursor_buffered(&db, n)` sets another read-ahead: more for fewer round trips, fewer to hold less in memory.
+- A background task reads up to 100 rows ahead on its own connection (or on the transaction's, which the cursor then borrows). `cursor_buffered(&db, n)` sets another read-ahead: more for fewer round trips, fewer to hold less in memory. On Oracle, the rows per round trip come from [`DbBuilder::fetch_array_size`](getting-started.md#pool-settings-and-tls) (default 100).
 - On a transaction, the cursor holds the connection: until it returns `None` or is dropped, any other statement on that transaction fails with `Error::InvalidQuery` (waiting would deadlock). Collect the rows first, or write through `db` / another transaction, if you need to write while reading.
 - Dropping the cursor stops it.
 - Model cursors refuse `with(...)`; use `chunk_by_id` when you need relations.
