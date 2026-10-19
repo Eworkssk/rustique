@@ -54,6 +54,10 @@ impl HasFactory for User {
             ..Default::default()
         }
     }
+
+    fn after_making(&mut self) {
+        self.name.push('#');
+    }
 }
 
 impl HasFactory for Image {
@@ -63,7 +67,7 @@ impl HasFactory for Image {
 }
 
 #[test]
-fn make_applies_states_in_order_with_a_new_n_per_model() {
+fn make_runs_states_then_hook_then_callbacks_with_a_new_n_per_model() {
     let users = User::factory()
         .count(3)
         .state(|u| u.name.push('!'))
@@ -71,7 +75,7 @@ fn make_applies_states_in_order_with_a_new_n_per_model() {
         .after_making(|u| u.name.push('?'))
         .make();
     assert_eq!(users.iter().map(|u| u.id).collect::<Vec<_>>(), [0, 10, 20]);
-    assert!(users.iter().all(|u| u.name.ends_with("!?") && !u.exists()));
+    assert!(users.iter().all(|u| u.name.ends_with("!#?") && !u.exists()));
     let names: HashSet<_> = users.iter().map(|u| &u.name).collect();
     assert_eq!(names.len(), 3);
 

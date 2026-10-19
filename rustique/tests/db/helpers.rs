@@ -573,29 +573,18 @@ async fn nested_transactions_retries_and_rollback_after() {
     for db in databases().await {
         create_table(&db, "orm_h_ledger", &[("amount", "INT", "NUMBER(10)")]).await;
         let ledger = QueryBuilder::table("orm_h_ledger");
-        db.transaction(|tx| {
-            let ledger = ledger.clone();
-            Box::pin(async move {
-                ledger.insert(tx, &["amount"], vec![vec![1.into()]]).await?;
-                let inner: rustique::Result<()> = tx
-                    .transaction(|tx| {
-                        let ledger = ledger.clone();
-                        Box::pin(async move {
-                            ledger.insert(tx, &["amount"], vec![vec![2.into()]]).await?;
-                            Err(Error::InvalidQuery("abort the inner part".into()))
-                        })
-                    })
-                    .await;
-                assert!(inner.is_err());
-                tx.transaction(|tx| {
-                    let ledger = ledger.clone();
-                    Box::pin(
-                        async move { ledger.insert(tx, &["amount"], vec![vec![3.into()]]).await },
-                    )
+        db.transaction(async |tx| {
+            ledger.insert(tx, &["amount"], vec![vec![1.into()]]).await?;
+            let inner: rustique::Result<()> = tx
+                .transaction(async |tx| {
+                    ledger.insert(tx, &["amount"], vec![vec![2.into()]]).await?;
+                    Err(Error::InvalidQuery("abort the inner part".into()))
                 })
+                .await;
+            assert!(inner.is_err());
+            tx.transaction(async |tx| ledger.insert(tx, &["amount"], vec![vec![3.into()]]).await)
                 .await?;
-                Ok::<_, Error>(())
-            })
+            Ok::<_, Error>(())
         })
         .await
         .unwrap();
@@ -616,20 +605,16 @@ async fn nested_transactions_retries_and_rollback_after() {
         };
         let dialect = db.dialect();
         let result: rustique::Result<()> = db
-            .transaction_with_retries(3, |tx| {
+            .transaction_with_retries(3, async |tx| {
                 calls += 1;
-                let attempt = calls;
-                let ledger = ledger.clone();
-                Box::pin(async move {
-                    ledger
-                        .insert(tx, &["amount"], vec![vec![10.into()]])
-                        .await?;
-                    if attempt < 3 {
-                        Err(deadlock(dialect))
-                    } else {
-                        Ok(())
-                    }
-                })
+                ledger
+                    .insert(tx, &["amount"], vec![vec![10.into()]])
+                    .await?;
+                if calls < 3 {
+                    Err(deadlock(dialect))
+                } else {
+                    Ok(())
+                }
             })
             .await;
         result.unwrap();
@@ -645,21 +630,18 @@ async fn nested_transactions_retries_and_rollback_after() {
         );
         let mut other = 0;
         let failed: rustique::Result<()> = db
-            .transaction_with_retries(3, |_| {
+            .transaction_with_retries(3, async |_| {
                 other += 1;
-                Box::pin(async { Err(Error::InvalidQuery("no".into())) })
+                Err(Error::InvalidQuery("no".into()))
             })
             .await;
         assert!(failed.is_err());
         assert_eq!(other, 1);
 
         let seen = db
-            .rollback_after(|tx| {
-                let ledger = ledger.clone();
-                Box::pin(async move {
-                    ledger.delete(tx).await?;
-                    ledger.count(tx).await
-                })
+            .rollback_after(async |tx| {
+                ledger.delete(tx).await?;
+                ledger.count(tx).await
             })
             .await
             .unwrap();

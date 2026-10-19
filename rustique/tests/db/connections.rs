@@ -184,9 +184,7 @@ async fn sticky_reads_use_the_primary_after_a_write() {
 
         Db::sticky_scope(async {
             assert_eq!(session(&db).await, replica, "a new scope");
-            db.transaction(|_| Box::pin(async { Ok::<_, Error>(()) }))
-                .await
-                .unwrap();
+            db.transaction(async |_| Ok::<_, Error>(())).await.unwrap();
             let primary = session(&db.write()).await;
             assert_eq!(session(&db).await, primary, "after a transaction");
         })

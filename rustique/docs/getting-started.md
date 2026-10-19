@@ -4,7 +4,7 @@
 
 ```toml
 [dependencies]
-rustique-orm = "0.1"   # imported as `rustique`
+rustique-orm = "0.3"   # imported as `rustique`
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 chrono = "0.4"                        # for date/time fields
 ```
@@ -23,7 +23,7 @@ Cargo features (the first three are on by default):
 rustls needs exactly one crypto provider. When another crate of the application enables a different one (reqwest 0.13 brings `aws-lc-rs`), the first TLS connection panics with "no process-level CryptoProvider available". Pick the provider the rest of the application uses:
 
 ```toml
-rustique-orm = { version = "0.1", default-features = false, features = ["mysql", "mysql-tls-aws-lc-rs", "oracle"] }
+rustique-orm = { version = "0.3", default-features = false, features = ["mysql", "mysql-tls-aws-lc-rs", "oracle"] }
 ```
 
 or install one at startup with `rustls::crypto::CryptoProvider::install_default`.
@@ -31,7 +31,7 @@ or install one at startup with `rustls::crypto::CryptoProvider::install_default`
 MySQL-only apps can turn Oracle off and never install Instant Client:
 
 ```toml
-rustique-orm = { version = "0.1", default-features = false, features = ["mysql", "mysql-tls"] }
+rustique-orm = { version = "0.3", default-features = false, features = ["mysql", "mysql-tls"] }
 ```
 
 ## Connecting

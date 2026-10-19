@@ -1,5 +1,5 @@
 use chrono::NaiveDateTime;
-use rustique::{Db, Dialect, Executor, HasFactory, Model, Rel};
+use rustique::{AnyExecutor, Db, Dialect, Executor, HasFactory, Model, Rel};
 
 use crate::{create_table, databases, drop_table};
 
@@ -99,6 +99,34 @@ impl HasFactory for Image {
     }
 }
 
+/// Logs every factory hook and callback, to check their order.
+#[rustique::model(table = "orm_f_notes")]
+#[derive(Debug, Clone, Default)]
+struct Note {
+    id: i64,
+    log: String,
+}
+
+impl HasFactory for Note {
+    fn definition(_: u64) -> Self {
+        Note::default()
+    }
+
+    fn after_making(&mut self) {
+        self.log.push_str("hook-make ");
+    }
+
+    async fn after_creating(&mut self, db: &AnyExecutor<'_>) -> rustique::Result<()> {
+        let id = self.id;
+        Post::factory()
+            .state(move |p| p.user_id = id)
+            .create(db)
+            .await?;
+        self.log.push_str("hook-create ");
+        self.save(db).await
+    }
+}
+
 const ID: (&str, &str) = ("BIGINT", "NUMBER(19)");
 const TEXT: (&str, &str) = ("VARCHAR(50)", "VARCHAR2(50 CHAR)");
 
@@ -130,6 +158,12 @@ async fn create_tables(db: &Db) {
     )
     .await;
     create_table(db, Role::TABLE, &[("name", TEXT.0, TEXT.1)]).await;
+    create_table(
+        db,
+        Note::TABLE,
+        &[("log", "VARCHAR(100)", "VARCHAR2(100 CHAR)")],
+    )
+    .await;
     create_table(
         db,
         Image::TABLE,
@@ -239,31 +273,43 @@ async fn factories_create_models_with_relations() {
         assert!(teams.iter().any(|t| Some(t.id) == owner.team_id));
         assert_eq!(Team::query().count(&db).await.unwrap(), before + 1);
 
+        // The model's hooks run before the factory's callbacks, and
         // after_creating gets the executor; run it in a transaction here.
+        let posts_before = Post::query().count(&db).await.unwrap();
         let tx = db.begin().await.unwrap();
-        let user = User::factory()
-            .after_creating(|user, db| {
+        let note = Note::factory()
+            .state(|n| n.log.push_str("state "))
+            .after_making(|n| n.log.push_str("call-make "))
+            .after_creating(|n, db| {
                 Box::pin(async move {
-                    Post::factory()
-                        .state({
-                            let id = user.id;
-                            move |p| p.user_id = id
-                        })
-                        .create(db)
-                        .await?;
-                    user.email = format!("done{}@x.io", user.id);
-                    user.save(db).await
+                    n.log.push_str("call-create");
+                    n.save(db).await
                 })
             })
             .create_one(&tx)
             .await
             .unwrap();
-        assert_eq!(user.posts().count(&tx).await.unwrap(), 1);
-        assert_eq!(
-            User::find_or_fail(&tx, user.id).await.unwrap().email,
-            user.email
-        );
+        let order = "state hook-make call-make hook-create call-create";
+        assert_eq!(note.log, order);
+        assert_eq!(Note::find_or_fail(&tx, note.id).await.unwrap().log, order);
+        let hooked = Post::query().where_("user_id", "=", note.id);
+        let on_note = hooked.clone().count(&tx).await.unwrap();
+        assert_eq!(Post::query().count(&tx).await.unwrap(), posts_before + 1);
         tx.rollback().await.unwrap();
-        assert!(User::find(&db, user.id).await.unwrap().is_none());
+        assert!(Note::find(&db, note.id).await.unwrap().is_none());
+        assert_eq!(Post::query().count(&db).await.unwrap(), posts_before);
+        assert_eq!(
+            hooked.count(&db).await.unwrap() + 1,
+            on_note,
+            "the hook's post"
+        );
+
+        // The hook's future is `Send`, so `create` can run on a spawned task.
+        let task_db = db.clone();
+        let spawned = tokio::spawn(async move { Note::factory().create_one(&task_db).await })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(spawned.log, "hook-make hook-create ");
     }
 }

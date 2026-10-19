@@ -103,14 +103,11 @@ async fn closure_commits_on_ok_and_rolls_back_on_err() {
         let table = setup(&db, "orm_tx_closure").await;
 
         let inserted = db
-            .transaction(|tx| {
-                let table = table.clone();
-                Box::pin(async move {
-                    table
-                        .insert(tx, &["name"], vec![vec!["kept".into()]])
-                        .await?;
-                    table.count(tx).await
-                })
+            .transaction(async |tx| {
+                table
+                    .insert(tx, &["name"], vec![vec!["kept".into()]])
+                    .await?;
+                table.count(tx).await
             })
             .await
             .unwrap();
@@ -128,30 +125,41 @@ async fn closure_commits_on_ok_and_rolls_back_on_err() {
             }
         }
         let result: Result<(), AppError> = db
-            .transaction(|tx| {
-                let table = table.clone();
-                Box::pin(async move {
-                    table
-                        .insert(tx, &["name"], vec![vec!["discarded".into()]])
-                        .await?;
-                    Err(AppError::Refused)
-                })
+            .transaction(async |tx| {
+                table
+                    .insert(tx, &["name"], vec![vec!["discarded".into()]])
+                    .await?;
+                Err(AppError::Refused)
             })
             .await;
         assert!(matches!(result, Err(AppError::Refused)), "{result:?}");
         assert_eq!(names(&db, &table).await, ["kept"]);
 
-        // The future is `Send`, so it can run on a spawned task.
+        // The future is `Send`, so it can run on a spawned task, also with
+        // captured borrows, retries and a nested savepoint.
         let task_db = db.clone();
+        let task_table = table.clone();
         tokio::spawn(async move {
+            let label = String::from("spawned");
             task_db
-                .transaction(|tx| {
-                    Box::pin(async move { tx.select("SELECT 1 FROM dual", []).await })
+                .transaction(async |tx| {
+                    tx.transaction(async |tx| {
+                        task_table
+                            .insert(tx, &["name"], vec![vec![label.as_str().into()]])
+                            .await
+                    })
+                    .await?;
+                    tx.select("SELECT 1 FROM dual", []).await
                 })
+                .await?;
+            // A retried closure must own its captures (`async move`) to stay `Send`.
+            task_db
+                .transaction_with_retries(2, async move |tx| task_table.count(tx).await)
                 .await
         })
         .await
         .unwrap()
         .unwrap();
+        assert_eq!(names(&db, &table).await, ["kept", "spawned"]);
     }
 }

@@ -45,6 +45,59 @@ pub trait HasFactory: Model {
     /// every call in the process (1, 2, 3, ...), for unique columns.
     fn definition(n: u64) -> Self;
 
+    /// Runs on every model a factory of this model makes, after its states
+    /// and before the factory's own [`after_making`](Factory::after_making)
+    /// callbacks, like `afterMaking` in Laravel's `configure()`.
+    fn after_making(&mut self) {}
+
+    /// Runs on every model a factory of this model saved, with the executor
+    /// [`create`](Factory::create) was given, before the factory's own
+    /// [`after_creating`](Factory::after_creating) callbacks, like
+    /// `afterCreating` in Laravel's `configure()`. Implement it as an
+    /// `async fn`; its body must be `Send`:
+    ///
+    /// ```
+    /// # use rustique::prelude::*;
+    /// # use rustique::AnyExecutor;
+    /// # #[rustique::model(table = "users")]
+    /// # #[derive(Debug, Clone, Default)]
+    /// # pub struct User { pub id: i64, pub name: String }
+    /// impl HasFactory for User {
+    ///     fn definition(n: u64) -> Self {
+    ///         User::default()
+    ///     }
+    ///
+    ///     async fn after_creating(&mut self, db: &AnyExecutor<'_>) -> rustique::Result<()> {
+    ///         self.name = format!("User {}", self.id);
+    ///         self.save(db).await
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// A body holding a non-`Send` value across an `await` does not compile:
+    ///
+    /// ```compile_fail
+    /// # use rustique::prelude::*;
+    /// # use rustique::AnyExecutor;
+    /// # #[rustique::model(table = "users")]
+    /// # #[derive(Debug, Clone, Default)]
+    /// # pub struct User { pub id: i64, pub name: String }
+    /// impl HasFactory for User {
+    ///     fn definition(n: u64) -> Self { User::default() }
+    ///
+    ///     async fn after_creating(&mut self, db: &AnyExecutor<'_>) -> rustique::Result<()> {
+    ///         let name = std::rc::Rc::new(format!("User {}", self.id));
+    ///         self.save(db).await?;
+    ///         self.name = (*name).clone();
+    ///         Ok(())
+    ///     }
+    /// }
+    /// ```
+    fn after_creating(&mut self, db: &AnyExecutor<'_>) -> impl Future<Output = Result<()>> + Send {
+        let _ = db;
+        async { Ok(()) }
+    }
+
     /// A [`Factory`] making one model; see its methods.
     fn factory() -> Factory<Self> {
         Factory {
@@ -75,9 +128,11 @@ type Recycled = (TypeId, Arc<[Vec<Value>]>);
 /// For each model, in order: `definition`, the parents' keys
 /// ([`for_`](Self::for_)), the [`state`](Self::state)s, the keys of the
 /// parent that [`has`](Self::has) creates it for, the
-/// [`after_making`](Self::after_making) callbacks. `create` then saves it,
-/// creates its [`has`](Self::has) children and, once all models are
-/// saved, runs the [`after_creating`](Self::after_creating) callbacks.
+/// [`HasFactory::after_making`] hook, the [`after_making`](Self::after_making)
+/// callbacks. `create` then saves it, creates its [`has`](Self::has)
+/// children and, once all models are saved, runs the
+/// [`HasFactory::after_creating`] hook and the
+/// [`after_creating`](Self::after_creating) callbacks.
 #[must_use]
 pub struct Factory<M> {
     count: usize,
@@ -110,15 +165,18 @@ impl<M: HasFactory> Factory<M> {
         self
     }
 
-    /// Runs `callback` on every model once it is made, after all states,
-    /// like Laravel's `afterMaking`.
+    /// Runs `callback` on every model once it is made, after all states and
+    /// [`HasFactory::after_making`], like Laravel's `afterMaking`. For a
+    /// callback every factory of the model needs, implement the hook instead.
     pub fn after_making(mut self, callback: impl Fn(&mut M) + Send + Sync + 'static) -> Self {
         self.after_making.push(Box::new(callback));
         self
     }
 
     /// Runs `callback` on every model [`create`](Self::create) saved, with
-    /// the executor it was given, like Laravel's `afterCreating`:
+    /// the executor it was given, after [`HasFactory::after_creating`], like
+    /// Laravel's `afterCreating`. Meant for one-off callbacks; the closure
+    /// returns a boxed future so it can be stored:
     ///
     /// ```
     /// # use rustique::prelude::*;
@@ -326,6 +384,7 @@ impl<M: HasFactory> Factory<M> {
             models.push(model);
         }
         for model in &mut models {
+            model.after_creating(db).await?;
             for callback in &self.after_creating {
                 callback(model, db).await?;
             }
@@ -340,6 +399,7 @@ impl<M: HasFactory> Factory<M> {
             state(&mut model, index);
         }
         set(&mut model, forced.iter().cloned());
+        model.after_making();
         for callback in &self.after_making {
             callback(&mut model);
         }

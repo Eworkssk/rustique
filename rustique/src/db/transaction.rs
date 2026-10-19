@@ -10,7 +10,7 @@ use super::mysql;
 use super::oracle;
 use super::{Cursor, Executed, Executor, log, sealed};
 use crate::grammar::{self, Compiled};
-use crate::{BoxFuture, Dialect, Error, Result, Row, Value};
+use crate::{Dialect, Error, Result, Row, Value};
 
 /// A transaction on one dedicated connection.
 ///
@@ -94,16 +94,16 @@ impl Transaction {
     /// ```no_run
     /// # use rustique::prelude::*;
     /// # async fn run(db: Db) -> rustique::Result<()> {
-    /// db.transaction(|tx| Box::pin(async move {
+    /// db.transaction(async |tx| {
     ///     tx.statement("INSERT INTO orders (total) VALUES (?)", [10.into()]).await?;
     ///     let optional = tx
-    ///         .transaction(|tx| Box::pin(async move {
+    ///         .transaction(async |tx| {
     ///             tx.statement("INSERT INTO coupons (code) VALUES (?)", ["X".into()]).await
-    ///         }))
+    ///         })
     ///         .await;
     ///     if optional.is_err() { /* the order stays, the coupon is gone */ }
     ///     Ok::<_, rustique::Error>(())
-    /// })).await
+    /// }).await
     /// # }
     /// ```
     ///
@@ -113,7 +113,7 @@ impl Transaction {
     /// when the savepoint cannot be created or released.
     pub async fn transaction<T, E, F>(&self, f: F) -> Result<T, E>
     where
-        F: for<'tx> FnOnce(&'tx Transaction) -> BoxFuture<'tx, Result<T, E>>,
+        F: AsyncFnOnce(&Transaction) -> Result<T, E>,
         E: From<Error>,
     {
         let savepoint = self.savepoint().await?;

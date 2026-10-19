@@ -29,7 +29,7 @@ pub use options::Tls;
 pub use transaction::{Savepoint, Transaction};
 
 use crate::grammar::{self, Compiled};
-use crate::{BoxFuture, Dialect, Error, Result, Row, Value};
+use crate::{Dialect, Error, Result, Row, Value};
 
 /// Outcome of a statement that returns no rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -598,19 +598,19 @@ impl Db {
     /// Runs `f` in a transaction: commits when it returns `Ok`, rolls back
     /// when it returns `Err` or panics. Like Laravel's `DB::transaction`.
     ///
-    /// The closure returns a boxed future, so the whole call stays `Send`
-    /// (for `tokio::spawn` and web handlers). Any error type converting from
-    /// [`Error`] works, so a business rule can abort the transaction:
+    /// The call stays `Send` (for `tokio::spawn` and web handlers) when the
+    /// closure's future is. Any error type converting from [`Error`] works,
+    /// so a business rule can abort the transaction:
     ///
     /// ```no_run
     /// # use rustique::prelude::*;
     /// # async fn run(db: Db) -> rustique::Result<()> {
     /// let id = db
-    ///     .transaction(|tx| Box::pin(async move {
+    ///     .transaction(async |tx| {
     ///         tx.statement("UPDATE accounts SET balance = balance - 10 WHERE id = ?", [1.into()]).await?;
     ///         let done = tx.statement("INSERT INTO payments (amount) VALUES (?)", [10.into()]).await?;
     ///         Ok::<_, rustique::Error>(done.last_insert_id)
-    ///     }))
+    ///     })
     ///     .await?;
     /// # Ok(()) }
     /// ```
@@ -621,7 +621,7 @@ impl Db {
     /// fails. A failing `ROLLBACK` is logged; the closure's error is returned.
     pub async fn transaction<T, E, F>(&self, f: F) -> Result<T, E>
     where
-        F: for<'tx> FnOnce(&'tx Transaction) -> BoxFuture<'tx, Result<T, E>>,
+        F: AsyncFnOnce(&Transaction) -> Result<T, E>,
         E: From<Error>,
     {
         let tx = self.begin().await?;
@@ -649,17 +649,21 @@ impl Db {
     /// [`TransactionError`], implemented for [`Error`]; implement it for an
     /// application error type that wraps [`Error`].
     ///
+    /// Where the call must be `Send` (`tokio::spawn`, web handlers), pass an
+    /// `async move |tx| { ... }` closure that owns its captures: rustc cannot
+    /// yet prove a borrowing `AsyncFnMut` closure's future `Send`.
+    ///
     /// # Errors
     ///
     /// As [`transaction`](Self::transaction), from the last attempt.
     pub async fn transaction_with_retries<T, E, F>(&self, attempts: u32, mut f: F) -> Result<T, E>
     where
-        F: for<'tx> FnMut(&'tx Transaction) -> BoxFuture<'tx, Result<T, E>>,
+        F: AsyncFnMut(&Transaction) -> Result<T, E>,
         E: TransactionError,
     {
         let mut attempt = 1;
         loop {
-            match self.transaction(|tx| f(tx)).await {
+            match self.transaction(async |tx| f(tx).await).await {
                 Err(e) if attempt < attempts && e.is_concurrency_error() => {
                     tracing::debug!(target: "rustique::query", attempt, "retrying transaction after a concurrency error");
                     attempt += 1;
@@ -676,11 +680,11 @@ impl Db {
     /// ```no_run
     /// # use rustique::prelude::*;
     /// # async fn run(db: Db) -> rustique::Result<()> {
-    /// db.rollback_after(|tx| Box::pin(async move {
+    /// db.rollback_after(async |tx| {
     ///     tx.statement("DELETE FROM users", []).await?;
     ///     assert_eq!(QueryBuilder::table("users").count(tx).await?, 0);
     ///     Ok::<_, rustique::Error>(())
-    /// }))
+    /// })
     /// .await?;
     /// # Ok(()) }
     /// ```
@@ -693,7 +697,7 @@ impl Db {
     /// The closure's error, or [`Error::Database`] when `BEGIN` or `ROLLBACK` fails.
     pub async fn rollback_after<T, E, F>(&self, f: F) -> Result<T, E>
     where
-        F: for<'tx> FnOnce(&'tx Transaction) -> BoxFuture<'tx, Result<T, E>>,
+        F: AsyncFnOnce(&Transaction) -> Result<T, E>,
         E: From<Error>,
     {
         let tx = self.begin().await?;

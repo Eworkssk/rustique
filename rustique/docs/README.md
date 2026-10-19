@@ -13,8 +13,8 @@ The pages follow the layout of the Laravel Eloquent docs, so if you know Laravel
 | [Casts](casts.md) | `#[derive(rustique::Cast)]`, `FromValue`, `Value`, custom types |
 | [Scopes, hooks and observers](events.md) | `#[rustique::scopes]`, global scopes, `Hooks`, `Observer` |
 | [Pagination, chunking and cursors](large-results.md) | `paginate`, `simple_paginate`, `cursor_paginate`, `chunk`, `chunk_by_id`, `cursor` |
-| [Transactions and raw SQL](database.md) | read replicas, `begin`, `transaction(\|tx\| ...)`, deadlock retries, nested transactions, `rollback_after` for tests, savepoints, `select` / `statement`, Oracle `next_sequence_values`, errors, query logging (OpenTelemetry span attributes) |
-| [Factories](factories.md) | `HasFactory`, `factory()`, `count`, `state`, `sequence`, `make` / `create`, `has` / `has_attached`, `for_` / `for_factory`, `recycle`, `after_making` / `after_creating` |
+| [Transactions and raw SQL](database.md) | read replicas, `begin`, `transaction(async \|tx\| ...)`, deadlock retries, nested transactions, `rollback_after` for tests, savepoints, `select` / `statement`, Oracle `next_sequence_values`, errors, query logging (OpenTelemetry span attributes) |
+| [Factories](factories.md) | `HasFactory`, `factory()`, `count`, `state`, `sequence`, `make` / `create`, `has` / `has_attached`, `for_` / `for_factory`, `recycle`, `after_making` / `after_creating` hooks and callbacks |
 | [Schema and migrations](migrations.md) | `Schema`, `Blueprint`, `change()`, `use_current`, comments, `Migrator` (`fresh`, `reset`, `--step`), seeders, `migrations!`, the CLI, migrations from a schema diff (`make:migration --diff`), the compile-time schema check |
 | [Database differences](dialects.md) | What changes between MySQL and Oracle |
 

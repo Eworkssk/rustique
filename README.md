@@ -58,11 +58,11 @@ user.save(&db).await?;
 user.delete(&db).await?;
 
 // Transactions roll back on error or drop
-db.transaction(|tx| Box::pin(async move {
+db.transaction(async |tx| {
     user.save(tx).await?;
     order.save(tx).await?;
     Ok::<_, rustique::Error>(order.id)
-})).await?;
+}).await?;
 ```
 
 ## Highlights
@@ -86,7 +86,7 @@ Published on crates.io as `rustique-orm`; the library is imported as `rustique`:
 
 ```toml
 [dependencies]
-rustique-orm = "0.1"
+rustique-orm = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 chrono = "0.4"
 ```
@@ -94,7 +94,7 @@ chrono = "0.4"
 MySQL only? Skip the Oracle client entirely:
 
 ```toml
-rustique-orm = { version = "0.1", default-features = false, features = ["mysql", "mysql-tls"] }
+rustique-orm = { version = "0.3", default-features = false, features = ["mysql", "mysql-tls"] }
 ```
 
 | Feature | Default | What it does |

@@ -272,40 +272,52 @@ let posts = Post::factory().count(3).state(move |p| p.user_id = user_id).create(
 
 ## Callbacks
 
-`after_making` runs on each model after its states, in `make` and `create`. `after_creating` runs on each saved model once the whole batch (and its `has` children) is saved, and gets the executor `create` was given as an `AnyExecutor` (a `&Db` or `&Transaction`, usable like either):
+Callbacks every factory of a model needs go on `HasFactory`, like Laravel's `configure()`. `after_making` runs on each model after its states, in `make` and `create`. `after_creating` runs on each saved model once the whole batch (and its `has` children) is saved, and gets the executor `create` was given as an `AnyExecutor` (a `&Db` or `&Transaction`, usable like either). Write it as an `async fn`; no `Box::pin` is needed, and the compiler checks that its body is `Send`:
 
 ```rust
 # use rustique::prelude::*;
-# #[rustique::model(table = "teams")]
-# #[derive(Debug, Clone, Default)]
-# pub struct Team { pub id: i64, pub name: String }
+use rustique::AnyExecutor;
 # #[rustique::model(table = "users")]
 # #[derive(Debug, Clone, Default)]
 # pub struct User {
-#     pub id: i64, pub team_id: i64, pub email: String,
-#     #[rustique(belongs_to(Team))] pub team: Rel<Option<Team>>,
+#     pub id: i64, pub email: String,
 #     #[rustique(has_many(Post))] pub posts: Rel<Vec<Post>>,
-#     #[rustique(belongs_to_many(Role, pivot = ["level"]))] pub roles: Rel<Vec<Role>>,
-#     #[rustique(morph_many(Image, name = "imageable"))] pub images: Rel<Vec<Image>>,
 # }
 # #[rustique::model(table = "posts")]
 # #[derive(Debug, Clone, Default)]
 # pub struct Post { pub id: i64, pub user_id: i64, pub title: String, #[rustique(belongs_to(User))] pub user: Rel<Option<User>> }
-# #[rustique::model(table = "roles")]
-# #[derive(Debug, Clone, Default)]
-# pub struct Role { pub id: i64, pub name: String }
-# #[rustique::model(table = "images")]
-# #[derive(Debug, Clone, Default)]
-# pub struct Image { pub id: i64, pub imageable_type: String, pub imageable_id: i64 }
-# impl HasFactory for Team { fn definition(n: u64) -> Self { Team { name: format!("Team {n}"), ..Default::default() } } }
-# impl HasFactory for User { fn definition(n: u64) -> Self { User { email: format!("user{n}@example.com"), ..Default::default() } } }
 # impl HasFactory for Post { fn definition(n: u64) -> Self { Post { title: format!("Post {n}"), ..Default::default() } } }
-# impl HasFactory for Role { fn definition(n: u64) -> Self { Role { name: format!("Role {n}"), ..Default::default() } } }
-# impl HasFactory for Image { fn definition(_: u64) -> Self { Image::default() } }
-let factory = User::factory()
-    .after_making(|user| user.email.make_ascii_lowercase())
-    .after_creating(|user, db| Box::pin(async move {
-        Post::factory().for_(&*user, "user").create(db).await?;
+
+impl HasFactory for User {
+    fn definition(n: u64) -> Self {
+        User { email: format!("User{n}@Example.com"), ..Default::default() }
+    }
+
+    fn after_making(&mut self) {
+        self.email.make_ascii_lowercase();
+    }
+
+    async fn after_creating(&mut self, db: &AnyExecutor<'_>) -> rustique::Result<()> {
+        Post::factory().for_(&*self, "user").create(db).await?;
         Ok(())
+    }
+}
+```
+
+For a one-off callback, chain `after_making` / `after_creating` on the factory. They run after the model's hooks, in the order they were added. A chained `after_creating` is stored, so its closure returns a boxed future:
+
+```rust
+# use rustique::prelude::*;
+# #[rustique::model(table = "users")]
+# #[derive(Debug, Clone, Default)]
+# pub struct User { pub id: i64, pub email: String }
+# impl HasFactory for User { fn definition(n: u64) -> Self { User { email: format!("user{n}@example.com"), ..Default::default() } } }
+let factory = User::factory()
+    .after_making(|user| user.email.push_str(".test"))
+    .after_creating(|user, db| Box::pin(async move {
+        user.email = format!("user{}@example.com", user.id);
+        user.save(db).await
     }));
 ```
+
+The order for each model is: `definition`, states, `HasFactory::after_making`, chained `after_making`; then, after saving, `HasFactory::after_creating`, chained `after_creating`.
