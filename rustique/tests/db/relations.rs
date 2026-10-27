@@ -558,5 +558,26 @@ async fn eager_limit_per_parent() {
             [[2, 3, 4], [2, 3, 4], [2, 3, 4]],
             "{dialect}"
         );
+
+        // On the main query; paging and chunking would replace its limit.
+        let top = Book::query()
+            .order_by_desc("rank")
+            .limit(2)
+            .limit_per(["shelf_id"]);
+        let mut books: Vec<(i64, i64)> = (top.get(&db).await)
+            .unwrap_or_else(|e| panic!("{dialect}: {e}"))
+            .iter()
+            .map(|b| (b.shelf_id, b.rank))
+            .collect();
+        books.sort_unstable();
+        assert_eq!(
+            books,
+            [(1, 4), (1, 5), (2, 4), (2, 5), (3, 4), (3, 5)],
+            "{dialect}"
+        );
+        let error = top.paginate(&db, 1, 10).await.unwrap_err().to_string();
+        assert!(error.contains("`paginate` cannot be combined"), "{error}");
+        let error = top.chunk(10).next(&db).await.unwrap_err().to_string();
+        assert!(error.contains("`chunk` cannot be combined"), "{error}");
     }
 }

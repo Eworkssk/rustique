@@ -144,6 +144,8 @@ let name: Option<String> = Flight::query().where_key(1).value(&db, "name").await
 
 `Model::query()` returns a `Query<Flight>`. It has every [query builder](query-builder.md) method (`where_*`, joins, `order_by`, `limit`, `when`, `union`, locks, ...) and returns models. It also has `count`, `exists`, `max` / `min` / `sum` / `avg`, `pluck`, `pluck_keyed`, `value`, `sole`, `where_keys`, `paginate`, `simple_paginate`, `cursor_paginate`, `chunk`, `chunk_by_id`, `cursor`, `update`, `increment` / `decrement`, `delete`, `force_delete`, and `latest()` / `oldest()`, which order by the model's `created_at` column.
 
+Most of them (`select`, `add_select`, `where_*`, joins, `group_by`, `having`, `order_by*`, `limit`, `offset`, `limit_per`, `for_page`, locks) are forwarded unchanged to the `QueryBuilder` method of the same name: their entry on `Query`'s rustdoc page only links there, and the description is on `QueryBuilder`.
+
 Need the raw builder? `query.into_builder()`.
 
 A query that selects only some columns, such as `Flight::query().select(["id", "name"])`, still returns models, as in Eloquent: fields whose columns were not read take their `Default` (model fields need one anyway). A select list holding `*` or `table.*` reads every column, and a missing one is still `Error::ColumnNotFound`. Saving such a model updates only the fields you changed.

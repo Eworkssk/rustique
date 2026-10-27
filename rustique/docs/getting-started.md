@@ -80,6 +80,7 @@ let db = Db::builder(&url)
 # Ok(()) }
 ```
 
+- Each `Db` is its own pool. With several application instances (pods, workers) on one database, the defaults add up: 10 instances of a MySQL `Db` keep up to 100 idle connections (10 each) and may open 1000. Size `max_connections` × instances below the server's `max_connections` (MySQL) or `processes` / `sessions` (Oracle). A query that finds no free connection within `acquire_timeout` (30 s by default) fails with `Error::Database`; a shorter timeout makes an overloaded instance fail fast instead of piling up requests.
 - `Tls::new()` alone verifies the server against the system's root certificates. `Tls::danger_accept_invalid_certs()` skips verification, for a local server with a self-signed certificate only.
 - Oracle TLS stays in the URL (`tcps://` plus a wallet); `.tls(...)` on an Oracle URL is an `Error::Config`.
 - `.session_setup([...])` runs its SQL on every new connection before the first query: `SET SESSION ...` on MySQL, `ALTER SESSION SET ...` (NLS formats, time zone) on Oracle. MySQL runs it again after each connection reset, and Oracle on the new session that replaces a dropped one, so the settings hold for every query; see [session state](database.md#session-state). A failing statement fails the query that opened the connection.

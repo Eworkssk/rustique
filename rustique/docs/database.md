@@ -268,7 +268,7 @@ let db = Db::builder("mysql://app:pw@localhost/app")
 
 Session state never reaches later queries that borrow the same pooled connection:
 
-- **MySQL**: a connection that ran raw SQL through `select` / `statement`, or a transaction, is reset when it returns to the pool. Query builder and model queries skip the reset and keep their prepared statements (about half the round trips per query).
+- **MySQL**: a connection that ran raw SQL through `select` / `statement`, or a transaction, is reset when it returns to the pool. The reset also drops the connection's cached prepared statements, so its next queries prepare again. Query builder and model queries outside a transaction skip the reset and keep their prepared statements (about half the round trips per query).
 - **Oracle** has no reset short of a new session (about 25 ms, against well under 1 ms for a pooled one). Raw SQL through `select` / `statement`, in a transaction or not, that does not start with `SELECT`, `WITH`, `INSERT`, `UPDATE`, `DELETE` or `MERGE` (`ALTER SESSION`, `SET ROLE`, PL/SQL blocks, `CALL`, ...) drops its session from the pool when the statement or transaction ends. Raw queries and DML keep their session, so a PL/SQL function called from them must not change package state or contexts, and rows in a global temporary table `ON COMMIT PRESERVE ROWS` outlive the request; delete them before it ends.
 
 Raw fragments inside the builder (`select_raw("@x := 1")`) are not checked; keep session changes out of them.

@@ -6,6 +6,9 @@ use chrono::{NaiveDate, NaiveTime};
 use super::{Clause, Condition, Conjunction, Operator, QueryBuilder, Raw};
 use crate::Value;
 
+/// `IN` lists longer than this log a warning in debug builds.
+const LONG_IN_LIST: usize = 1000;
+
 /// `column op value`. `= NULL` and `<> NULL` become `IS [NOT] NULL`, as in Laravel.
 pub(super) fn basic(column: String, op: &str, value: Value) -> Result<Condition, String> {
     let parsed = Operator::parse(op).ok_or_else(|| format!("unknown operator `{op}`"))?;
@@ -176,7 +179,16 @@ impl QueryBuilder {
         values: impl IntoIterator<Item: Into<Value>>,
         negated: bool,
     ) -> Self {
-        let values = values.into_iter().map(Into::into).collect();
+        let values: Vec<Value> = values.into_iter().map(Into::into).collect();
+        // Eager loads send at most 1000 keys per query, so only user lists warn.
+        if cfg!(debug_assertions) && values.len() > LONG_IN_LIST {
+            tracing::warn!(
+                target: "rustique::query",
+                column,
+                values = values.len(),
+                "long IN list; filter with a subquery (`where_in_sub`) instead of plucked ids"
+            );
+        }
         self.push_where(
             conjunction,
             Ok(Condition::In {

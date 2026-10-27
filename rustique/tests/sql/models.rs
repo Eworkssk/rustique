@@ -68,6 +68,21 @@ fn soft_deleted_rows_are_hidden() {
 }
 
 #[test]
+fn limit_per_numbers_models_inside_the_soft_delete_filter() {
+    assert_sql(
+        &User::query()
+            .order_by("id")
+            .limit(2)
+            .limit_per(["name"])
+            .into_builder(),
+        "SELECT * FROM (SELECT `users`.*, ROW_NUMBER() OVER (PARTITION BY `name` ORDER BY `id` ASC) AS `orm_row` \
+         FROM `users` WHERE `users`.`deleted_at` IS NULL) `orm_limited` WHERE `orm_limited`.`orm_row` <= ? \
+         ORDER BY `orm_limited`.`orm_row` ASC",
+        r#"SELECT * FROM (SELECT "USERS".*, ROW_NUMBER() OVER (PARTITION BY "NAME" ORDER BY "ID" ASC) AS "ORM_ROW" FROM "USERS" WHERE "USERS"."DELETED_AT" IS NULL) "ORM_LIMITED" WHERE "ORM_LIMITED"."ORM_ROW" <= :1 ORDER BY "ORM_LIMITED"."ORM_ROW" ASC"#,
+    );
+}
+
+#[test]
 fn soft_delete_filter_wraps_or_conditions() {
     let query = User::query().where_("id", "=", 1).or_where("id", "=", 2);
     assert_eq!(

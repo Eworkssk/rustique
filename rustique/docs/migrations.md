@@ -109,6 +109,17 @@ t.drop_foreign("posts_user_id_foreign");
 
 Default names follow Laravel: `{table}_{columns}_{unique|index|foreign}`.
 
+`constrained()` adds only the foreign key, as in Laravel. MySQL needs an index on the column and creates one itself, named after the key, but silently drops it once another index starts with that column. A later `down()` that drops that other index then fails with error 1553 (`needed in a foreign key constraint`). Oracle creates no index for a foreign key at all. Give foreign key columns their own index, so their index never depends on another one:
+
+```rust
+# async fn run(db: rustique::Db) -> rustique::Result<()> {
+# rustique::Schema::table(&db, "tasks", |t| {
+t.foreign_id("project_id").index().constrained("projects");
+# }).await }
+```
+
+For a table that already relies on the implicit index, have the `down()` drop the foreign key before the composite index, and add it again afterwards.
+
 ## Migrations
 
 A migration is a module with `up` and `down`. Its name is the module name; migrations run in listed order.

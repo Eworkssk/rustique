@@ -270,6 +270,7 @@ impl QueryBuilder {
     /// the outer query keeps the numbers in range, ordered by them. Needs an
     /// order. Eager loads use it for a constraint's `limit`, so
     /// `with_where("posts", |q| q.order_by_desc("id").limit(3))` loads 3 posts per user.
+    /// Paging and chunking replace the limit, so they fail on such a query.
     pub fn limit_per(mut self, columns: impl IntoIterator<Item: Into<String>>) -> Self {
         self.limit_per = columns.into_iter().map(Into::into).collect();
         self
@@ -421,6 +422,14 @@ impl QueryBuilder {
     /// Keeps the first mistake; later ones are usually caused by it.
     pub(crate) fn fail(&mut self, message: String) {
         self.error.get_or_insert(message);
+    }
+
+    /// Fails paging and chunking, which replace the limit that
+    /// [`limit_per`](Self::limit_per) applies per group.
+    pub(crate) fn reject_limit_per(&mut self, method: &str) {
+        if !self.limit_per.is_empty() {
+            self.fail(format!("`{method}` cannot be combined with `limit_per`"));
+        }
     }
 
     /// Renames table `table` to `alias` in this query: `FROM table AS alias`

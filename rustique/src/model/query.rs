@@ -370,6 +370,7 @@ impl<M: Model> Query<M> {
         order_by_raw(sql: impl Into<String>, binds: impl IntoIterator<Item = Value>);
         limit(limit: u64);
         offset(offset: u64);
+        limit_per(columns: impl IntoIterator<Item: Into<String>>);
         for_page(page: u64, per_page: u64);
         lock_for_update();
         lock_for_update_wait(timeout: std::time::Duration);
@@ -990,8 +991,10 @@ impl<M: Model> Query<M> {
     /// As [`get`](Self::get).
     pub async fn paginate(&self, db: &impl Executor, page: u64, per_page: u64) -> Result<Page<M>> {
         let (page, per_page) = (page.max(1), per_page.max(1));
-        let total = self.count(db).await?;
-        let items = self.clone().for_page(page, per_page).get(db).await?;
+        let mut query = self.clone();
+        query.builder.reject_limit_per("paginate");
+        let total = query.count(db).await?;
+        let items = query.for_page(page, per_page).get(db).await?;
         Ok(Page {
             items,
             total,

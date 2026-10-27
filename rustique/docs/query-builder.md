@@ -87,6 +87,17 @@ Operators: `=`, `<>`, `!=`, `<`, `<=`, `>`, `>=`, `like`, `not like`, `is`, `is 
 
 Values are anything that converts into `Value`: integers, floats, `bool`, `&str`, `String`, `chrono` types, `rust_decimal::Decimal`, `serde_json::Value`, `Option<T>`, and your [cast types](casts.md). They are always sent as bindings, never spliced into SQL, with one exception: an `IN` list of more than 1000 integers (MySQL and Oracle allow 65,535 bindings per statement) is written into the SQL on MySQL, like Laravel's `whereIntegerInRaw`, and bound as one JSON array on Oracle, so `where_in("id", ids)` works with any number of integer ids. Longer lists of other values still fail with `Error::InvalidQuery` past 65,535 bindings.
 
+Long `IN` lists are slow even so: the database parses and checks every value, and on MySQL each list length (and each list over 1000 integers) is a statement of its own in the prepared statement cache. In debug builds a `where_in` / `where_not_in` list of more than 1000 values logs a warning (target `rustique::query`). Ids plucked from one query to filter another belong in a subquery, which the database runs as one statement:
+
+```rust
+# use rustique::prelude::*;
+# async fn run(db: Db) -> rustique::Result<()> {
+// Not: let ids: Vec<i64> = projects.pluck(&db, "id").await?; ... .where_in("project_id", ids)
+let projects = QueryBuilder::table("projects").select(["id"]).where_("archived", "=", false);
+let tasks = QueryBuilder::table("tasks").where_in_sub("project_id", projects).get(&db).await?;
+# Ok(()) }
+```
+
 Raw SQL fragments use `?` placeholders on both databases; the Oracle grammar rewrites them to `:1, :2, ...`. A raw condition next to others is parenthesized, so an `OR` inside it (`where_raw("a = ? OR b = ?", ...)`) cannot escape the soft-delete filter, scopes or `chunk_by_id`.
 
 ### Dates and JSON
@@ -217,7 +228,9 @@ let q = QueryBuilder::table("users")
 # Ok(()) }
 ```
 
-`limit_per(["user_id"])` applies `limit` / `offset` to each group of rows sharing those columns, like Laravel's `groupLimit`: `SELECT * FROM (SELECT ..., ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY <the query's order>) AS orm_row FROM ...) orm_limited WHERE orm_row <= ? ORDER BY orm_row`. The query needs an order. Eager loads use it for a `with_where` limit.
+`limit_per(["user_id"])` applies `limit` / `offset` to each group of rows sharing those columns, like Laravel's `groupLimit`: `SELECT * FROM (SELECT ..., ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY <the query's order>) AS orm_row FROM ...) orm_limited WHERE orm_row <= ? ORDER BY orm_row`. The query needs an order. Eager loads use it for a `with_where` limit, and `Model::query()` has it too, for "the first N of each group" in one query: `Task::query().order_by("position").limit(50).limit_per(["task_list_id"])` loads at most 50 tasks of each list. The rows come back ordered by their number within the group (the first task of every list, then the second, ...), so group them in Rust. `paginate`, `simple_paginate`, `cursor_paginate`, `chunk` and `chunk_by_id` replace the limit, so they fail with `Error::InvalidQuery` on such a query.
+
+`order_by_raw` sorts by an expression, which an ordinary column index cannot provide: `order_by_raw("due_on IS NULL", [])` makes the database sort every matching row before the `limit`. Sort by plain indexed columns on large tables, or keep the expression to a small, already filtered result.
 
 ## Unions
 

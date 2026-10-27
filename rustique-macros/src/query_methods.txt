@@ -31,6 +31,7 @@ left_join
 left_join_sub
 left_join_with
 limit
+limit_per
 lock_for_update
 lock_for_update_no_wait
 lock_for_update_wait

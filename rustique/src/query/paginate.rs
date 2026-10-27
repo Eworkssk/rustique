@@ -166,6 +166,7 @@ impl QueryBuilder {
         let forward = cursor.as_ref().is_none_or(|c| c.next);
 
         let mut query = self.clone();
+        query.reject_limit_per("cursor_paginate");
         query.group_or_wheres();
         query.offset = None;
         query.limit = Some(per_page.saturating_add(1));

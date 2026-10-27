@@ -182,8 +182,10 @@ impl QueryBuilder {
         per_page: u64,
     ) -> Result<Page<Row>> {
         let (page, per_page) = (page.max(1), per_page.max(1));
-        let total = self.count(db).await?;
-        let items = self.clone().for_page(page, per_page).get(db).await?;
+        let mut query = self.clone();
+        query.reject_limit_per("paginate");
+        let total = query.count(db).await?;
+        let items = query.for_page(page, per_page).get(db).await?;
         Ok(Page {
             items,
             total,
@@ -212,7 +214,9 @@ impl QueryBuilder {
 
     /// The query of a [`simple_paginate`](Self::simple_paginate) page: one row more than the page.
     pub(crate) fn simple_page_rows(&self, page: u64, per_page: u64) -> Self {
-        self.clone()
+        let mut query = self.clone();
+        query.reject_limit_per("simple_paginate");
+        query
             .offset((page - 1).saturating_mul(per_page))
             .limit(per_page.saturating_add(1))
     }
@@ -241,6 +245,7 @@ impl QueryBuilder {
         if query.orders.is_empty() {
             query.fail("`chunk` needs `order_by`; or use `chunk_by_id`".to_owned());
         }
+        query.reject_limit_per("chunk");
         query.offset = None;
         Chunks {
             query: query.limit(size.max(1)),
@@ -275,6 +280,7 @@ impl QueryBuilder {
     /// unique together, such as a composite key.
     pub(crate) fn chunk_by_columns(&self, size: u64, columns: Vec<String>) -> Chunks {
         let mut query = self.clone();
+        query.reject_limit_per("chunk_by_id");
         // `a OR b AND id > ?` would only page `b`.
         query.group_or_wheres();
         query.orders.clear();
