@@ -163,3 +163,35 @@ async fn closure_commits_on_ok_and_rolls_back_on_err() {
         assert_eq!(names(&db, &table).await, ["kept", "spawned"]);
     }
 }
+
+/// A failure that already ended the whole transaction (a MySQL deadlock,
+/// here a `ROLLBACK`) must surface, not the failed `ROLLBACK TO SAVEPOINT`.
+#[tokio::test]
+async fn execute_all_keeps_the_error_when_the_savepoint_is_gone() {
+    for db in databases().await {
+        let compiled = |sql: &str| rustique::Compiled {
+            sql: sql.to_owned(),
+            binds: Vec::new(),
+            batch: None,
+            returning: 0,
+        };
+        let tx = db.begin().await.unwrap();
+        let error = tx
+            .execute_all(vec![
+                compiled("ROLLBACK"),
+                compiled("DELETE FROM orm_no_such_table"),
+            ])
+            .await
+            .unwrap_err();
+        let missing_table = if db.dialect() == rustique::Dialect::MySql {
+            1146
+        } else {
+            942
+        };
+        assert!(
+            matches!(error, rustique::Error::Database { code: Some(code), .. } if code == missing_table),
+            "{error}"
+        );
+        tx.rollback().await.unwrap();
+    }
+}
