@@ -290,7 +290,7 @@ if db.dialect() == Dialect::Oracle { /* ... */ }
 # Ok(()) }
 ```
 
-Also on `Executor`: `fetch_all(Compiled)`, `execute(Compiled)`, `execute_all(Vec<Compiled>)` (all in one transaction or savepoint), `cursor(Compiled)`.
+Also on `Executor`: `fetch_all(Compiled)`, `execute(Compiled)`, `execute_all(Vec<Compiled>)` (all in one transaction or savepoint; on failure it returns the failing statement's error, also when a MySQL deadlock already rolled back the whole transaction), `cursor(Compiled)`.
 
 ### Oracle sequences
 

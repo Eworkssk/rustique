@@ -108,6 +108,8 @@ pub trait Executor: Sync + sealed::Sealed {
     /// # Errors
     ///
     /// The first statement's error, after undoing the statements before it.
+    /// That error is kept even when the undo fails, e.g. after a MySQL
+    /// deadlock that already rolled back the whole transaction.
     fn execute_all(
         &self,
         queries: Vec<Compiled>,
