@@ -123,9 +123,7 @@ impl Transaction {
                 Ok(value)
             }
             Err(e) => {
-                if let Err(rollback) = self.rollback_to(&savepoint).await {
-                    tracing::warn!(target: "rustique::query", error = %rollback, "rollback to savepoint failed");
-                }
+                self.undo(&savepoint).await;
                 Err(e)
             }
         }
@@ -140,6 +138,15 @@ impl Transaction {
     pub async fn rollback_to(&self, savepoint: &Savepoint) -> Result<()> {
         self.run(&format!("ROLLBACK TO SAVEPOINT {}", savepoint.name))
             .await
+    }
+
+    /// Rolls back to `savepoint` after an error, keeping that error: a
+    /// MySQL deadlock (1213) has already rolled back the whole transaction
+    /// and its savepoints, so `ROLLBACK TO` would fail with 1305 instead.
+    async fn undo(&self, savepoint: &Savepoint) {
+        if let Err(rollback) = self.rollback_to(savepoint).await {
+            tracing::warn!(target: "rustique::query", error = %rollback, "rollback to savepoint failed");
+        }
     }
 
     /// Keeps the work done since `savepoint` and forgets the savepoint.
@@ -307,7 +314,7 @@ impl Executor for Transaction {
             match self.execute(query).await {
                 Ok(executed) => results.push(executed),
                 Err(error) => {
-                    self.rollback_to(&savepoint).await?;
+                    self.undo(&savepoint).await;
                     return Err(error);
                 }
             }
@@ -323,7 +330,7 @@ impl Executor for Transaction {
             match self.fetch_all(query).await {
                 Ok(rows) => results.push(rows),
                 Err(error) => {
-                    self.rollback_to(&savepoint).await?;
+                    self.undo(&savepoint).await;
                     return Err(error);
                 }
             }
